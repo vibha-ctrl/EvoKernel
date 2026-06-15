@@ -1,104 +1,121 @@
 # EvoKernel Report — fused_rmsnorm_rope
 
-## Summary
-
-| Metric | Value |
-|--------|-------|
-| Kernel type | `fused_rmsnorm_rope` |
-| Baseline latency | N/A |
-| Best latency | **24.4 µs** |
-| Speedup | N/A |
-| Best candidate | `gen67_6fba567c` |
-| Tool calls used | 27 |
-| Total candidates evaluated | 29 |
-
 ## Performance Progression
 
 ```
 Latency (µs) by generation:
 
-  Call  0 | █████████████████████                    47.4
-  Call  3 | █████████████████████                    47.5
-  Call  4 | █████████████████████                    46.8
+  Call  0 | █████████████████████                    46.8
+  Call  2 | ██████████████████████                   47.5
+  Call  3 | ███████████████████                      43.0
+  Call  4 | ███████████████████                      43.0
   Call  5 | ██████████████                           31.4
+  Call 11 | █████████████████████                    47.1
+  Call 12 | ███████████████████                      42.4
   Call 13 | █████████████████████                    47.3
   Call 14 | ██████████████                           32.1
-  Call 15 | █████████████████████████████████        74.3
-  Call 22 | ████████████████████████████████████████ 88.9
+  Call 15 | ██████████████████████████████████       74.3
+  Call 19 | ██████████████████████                   48.8
+  Call 21 | █████████████████████                    46.9
+  Call 22 | ████████████████████                     43.2
   Call 23 | ██████████████                           31.5
   Call 24 | ███████████████████                      42.6
-  Call 32 | █████████████████████                    47.6
-  Call 33 | ███████████████████                      44.3
+  Call 31 | █████████████                            28.1
+  Call 32 | ██████████████                           30.5
+  Call 33 | ████████████                             26.4
   Call 34 | █████████████                            29.5
-  Call 41 | ██████████████                           32.9
-  Call 43 | ████████████                             28.6
+  Call 40 | ███████████                              25.6
+  Call 41 | ████████████                             27.7
+  Call 42 | ██████████                               23.5
+  Call 43 | █████████████                            28.6
   Call 49 | ███████████████                          33.7
-  Call 50 | ██████████████                           32.4
-  Call 51 | ████████████████████████████████         71.7
-  Call 59 | ████████████                             28.0
-  Call 60 | █████████████████                        38.6
+  Call 50 | ███████████████                          32.4
+  Call 51 | ███████████                              25.7
+  Call 52 | ███████████████████████████████████      75.9
+  Call 53 | █████████████████████████████████        73.1
+  Call 59 | █████████████                            28.0
+  Call 60 | █████████████                            28.1
+  Call 61 | ███████████                              25.1
+  Call 62 | ██████████                               23.6
   Call 65 | ████████████                             27.2
-  Call 67 | ██████████                               24.4
+  Call 67 | ███████████                              24.4
+  Call 69 | ████████████████████████████████████████ 86.1
+  Call 70 | ███████████████                          33.9
+  Call 71 | █████████████████████████████████        72.1
   Call 75 | ███████████                              25.5
-  Call 76 | ███████████████                          34.5
+  Call 76 | ████████████████                         34.5
 ```
 
 ## Candidates by Tool Call
 
 | Tool Call | Best Latency (µs) | Candidates | Passed Verify |
 |-----------|-------------------|------------|----------------|
-| 0 | 47.4 | 3 | 1 |
-| 3 | 47.5 | 1 | 1 |
-| 4 | 46.8 | 1 | 1 |
+| 0 | 46.8 | 4 | 2 |
+| 2 | 47.5 | 1 | 1 |
+| 3 | 43.0 | 2 | 2 |
+| 4 | 43.0 | 2 | 2 |
 | 5 | 31.4 | 1 | 1 |
-| 13 | 47.3 | 1 | 1 |
+| 11 | 47.1 | 1 | 1 |
+| 12 | 42.4 | 1 | 1 |
+| 13 | 47.3 | 2 | 1 |
 | 14 | 32.1 | 1 | 1 |
 | 15 | 74.3 | 1 | 1 |
-| 22 | 88.9 | 1 | 1 |
+| 19 | 48.8 | 1 | 1 |
+| 21 | 46.9 | 1 | 1 |
+| 22 | 43.2 | 2 | 2 |
 | 23 | 31.5 | 1 | 1 |
 | 24 | 42.6 | 1 | 1 |
-| 32 | 47.6 | 1 | 1 |
-| 33 | 44.3 | 1 | 1 |
+| 31 | 28.1 | 1 | 1 |
+| 32 | 30.5 | 2 | 2 |
+| 33 | 26.4 | 2 | 2 |
 | 34 | 29.5 | 1 | 1 |
-| 41 | 32.9 | 1 | 1 |
-| 42 | — | 1 | 0 |
+| 40 | 25.6 | 1 | 1 |
+| 41 | 27.7 | 2 | 2 |
+| 42 | 23.5 | 2 | 1 |
 | 43 | 28.6 | 1 | 1 |
 | 49 | 33.7 | 1 | 1 |
 | 50 | 32.4 | 1 | 1 |
-| 51 | 71.7 | 1 | 1 |
+| 51 | 25.7 | 2 | 2 |
+| 52 | 75.9 | 1 | 1 |
+| 53 | 73.1 | 1 | 1 |
 | 59 | 28.0 | 1 | 1 |
-| 60 | 38.6 | 1 | 1 |
+| 60 | 28.1 | 2 | 2 |
+| 61 | 25.1 | 1 | 1 |
+| 62 | 23.6 | 1 | 1 |
 | 65 | 27.2 | 1 | 1 |
 | 66 | — | 1 | 0 |
 | 67 | 24.4 | 1 | 1 |
+| 69 | 86.1 | 1 | 1 |
+| 70 | 33.9 | 1 | 1 |
+| 71 | 72.1 | 1 | 1 |
 | 74 | — | 1 | 0 |
 | 75 | 25.5 | 1 | 1 |
 | 76 | 34.5 | 1 | 1 |
+| 79 | — | 1 | 0 |
+| 80 | — | 1 | 0 |
+| 81 | — | 1 | 0 |
 
 ## Best Kernel Configuration
 
-**Candidate:** `gen67_6fba567c`  
-**Latency:** 24.4 µs  
+**Candidate:** `gen42_85be03a9`  
+**Latency:** 23.5 µs  
 
 ### Triton Parameters
 
 | Parameter | Value |
 |-----------|-------|
-| `num_warps` | None |
-| `num_stages` | None |
-| `shared_mem_bytes` | None |
-| `register_count` | None |
-| `theoretical_occupancy` | None% |
+| `num_warps` | 2 |
+| `num_stages` | 1 |
+| `shared_mem_bytes` | 8 |
+| `register_count` | 288 |
+| `theoretical_occupancy` | N/A |
 
-### Nsight Compute Metrics
+### Nsight Systems Metrics
 
 | Metric | Value |
 |--------|-------|
-| SM throughput | None% |
-| DRAM utilization | None% |
-| L1 hit rate | None% |
-| Stall (memory dependency) | None% |
-| Stall (long scoreboard) | None% |
+| SM active cycles | N/A |
+| DRAM utilization | N/A |
 
 ## Best Kernel Source Code
 
@@ -109,7 +126,7 @@ import triton.language as tl
 
 
 @triton.jit
-def _fused_rmsnorm_rope_kernel_precompute_rstd(
+def _fused_rmsnorm_rope_kernel_num_stages_1(
     X,
     W,
     Cos,
@@ -227,29 +244,28 @@ def run(
 
     grid = (seq_len, num_head_blocks)
     
-    _fused_rmsnorm_rope_kernel_precompute_rstd[grid](
+    _fused_rmsnorm_rope_kernel_num_stages_1[grid](
         x, weight, cos, sin, q_out, k_out,
         N, n_heads, head_dim, eps,
         BLOCK_SIZE=BLOCK_SIZE,
         HALF_DIM=HALF_DIM,
         HEADS_PER_BLOCK=HEADS_PER_BLOCK,
         num_warps=2,
-        num_stages=2,
+        num_stages=1,
     )
     return q_out, k_out
 
 
 KERNEL_TYPE = "fused_rmsnorm_rope"
-DESCRIPTION = "Pre-compute x * rstd once for the entire row before applying weights in the head loop"
+DESCRIPTION = "Use num_stages=1 instead of 2 to reduce register pressure for software pipelining"
 ```
 
 ## Optimization Journey
 
-- **Tool call 0**: 47.4 µs (baseline)
-- **Tool call 4**: 46.8 µs — new best (+1.3% vs baseline)
-- **Tool call 5**: 31.4 µs — new best (+33.7% vs baseline)
-- **Tool call 34**: 29.5 µs — new best (+37.8% vs baseline)
-- **Tool call 43**: 28.6 µs — new best (+39.6% vs baseline)
-- **Tool call 59**: 28.0 µs — new best (+41.0% vs baseline)
-- **Tool call 65**: 27.2 µs — new best (+42.7% vs baseline)
-- **Tool call 67**: 24.4 µs — new best (+48.5% vs baseline)
+- **Tool call 0**: 46.8 µs (baseline)
+- **Tool call 3**: 43.0 µs — new best (+8.1% vs baseline)
+- **Tool call 5**: 31.4 µs — new best (+32.9% vs baseline)
+- **Tool call 31**: 28.1 µs — new best (+39.9% vs baseline)
+- **Tool call 33**: 26.4 µs — new best (+43.6% vs baseline)
+- **Tool call 40**: 25.6 µs — new best (+45.3% vs baseline)
+- **Tool call 42**: 23.5 µs — new best (+49.8% vs baseline)
