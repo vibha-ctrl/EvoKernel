@@ -1,0 +1,23 @@
+# Environment / secrets
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+env/
+
+# EvoKernel data
+*.db
+*.ncu-rep
+
+# results/ Markdown files ARE committed (live search progress)
+# report.md at root is the final report, also committed after search
+
+# IDE
+.vscode/
+.idea/
