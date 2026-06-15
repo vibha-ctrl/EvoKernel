@@ -123,7 +123,6 @@ class CandidateStore:
         d = asdict(c)
         # SQLite doesn't have bool — convert
         d["verify_passed"] = int(c.verify_passed) if c.verify_passed is not None else None
-        d["ncu_available"] = int(c.ncu_available)
 
         cols = ", ".join(d.keys())
         placeholders = ", ".join(["?"] * len(d))

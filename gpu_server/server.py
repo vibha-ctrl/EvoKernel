@@ -10,6 +10,8 @@ Run with:
   uvicorn server:app --host 0.0.0.0 --port 8000
 """
 
+import importlib.util
+import os
 import subprocess
 import sys
 import tempfile
@@ -195,13 +197,34 @@ def _get_reference_output(kernel_type: str, inputs: dict[str, Any]):
 
 
 def _exec_candidate(code: str) -> dict:
-    """Safely exec candidate code. Returns namespace dict or raises."""
-    namespace: dict = {}
-    compiled = compile(code, "<candidate>", "exec")
-    exec(compiled, namespace)
-    if "run" not in namespace:
+    """
+    Load candidate code from a real temp file so Triton's JIT can read the source.
+
+    Using exec() with filename '<candidate>' causes Triton's @triton.jit decorator
+    to fail with 'could not get source code' because inspect.getsource() requires a
+    real on-disk file. Writing to a .py file and importing via importlib fixes this.
+    """
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".py", prefix="evokernel_candidate_",
+        delete=False, dir=tempfile.gettempdir()
+    ) as f:
+        f.write(code)
+        tmp_path = f.name
+
+    try:
+        spec = importlib.util.spec_from_file_location("evokernel_candidate", tmp_path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
+    if not hasattr(mod, "run"):
         raise AttributeError("Candidate code must define a function named 'run'")
-    return namespace
+
+    return vars(mod)
 
 
 def _call_run(namespace: dict, kernel_type: str, inputs: dict[str, Any]):
