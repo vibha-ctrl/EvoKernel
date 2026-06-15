@@ -65,26 +65,28 @@ def generate_report(
     lines.append(f"**Latency:** {best.latency_us:.1f} µs  ")
     lines.append("")
 
+    def _fmt(val, suffix="", fmt=None):
+        if val is None:
+            return "N/A"
+        return f"{val:{fmt}}{suffix}" if fmt else f"{val}{suffix}"
+
     lines.append("### Triton Parameters")
     lines.append("")
     lines.append(f"| Parameter | Value |")
     lines.append(f"|-----------|-------|")
-    lines.append(f"| `num_warps` | {best.num_warps} |")
-    lines.append(f"| `num_stages` | {best.num_stages} |")
-    lines.append(f"| `shared_mem_bytes` | {best.shared_mem_bytes} |")
-    lines.append(f"| `register_count` | {best.register_count} |")
-    lines.append(f"| `theoretical_occupancy` | {best.theoretical_occupancy_pct}% |")
+    lines.append(f"| `num_warps` | {_fmt(best.num_warps)} |")
+    lines.append(f"| `num_stages` | {_fmt(best.num_stages)} |")
+    lines.append(f"| `shared_mem_bytes` | {_fmt(best.shared_mem_bytes)} |")
+    lines.append(f"| `register_count` | {_fmt(best.register_count)} |")
+    lines.append(f"| `theoretical_occupancy` | {_fmt(best.theoretical_occupancy_pct, suffix='%', fmt='.1f')} |")
     lines.append("")
 
-    lines.append("### Nsight Compute Metrics")
+    lines.append("### Nsight Systems Metrics")
     lines.append("")
     lines.append("| Metric | Value |")
     lines.append("|--------|-------|")
-    lines.append(f"| SM throughput | {best.sm_active_cycles_pct}% |")
-    lines.append(f"| DRAM utilization | {best.dram_utilization_pct}% |")
-    lines.append(f"| L1 hit rate | {best.l1_hit_rate_pct}% |")
-    lines.append(f"| Stall (memory dependency) | {best.stall_memory_dependency_pct}% |")
-    lines.append(f"| Stall (long scoreboard) | {best.stall_long_scoreboard_pct}% |")
+    lines.append(f"| SM active cycles | {_fmt(best.sm_active_cycles_pct, suffix='%', fmt='.1f')} |")
+    lines.append(f"| DRAM utilization | {_fmt(best.dram_utilization_pct, suffix='%', fmt='.1f')} |")
     lines.append("")
 
     lines.append("## Best Kernel Source Code")

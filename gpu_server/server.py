@@ -430,20 +430,40 @@ def _extract_triton_metadata(
 
     metadata = {}
     for name, obj in namespace.items():
-        if callable(obj) and hasattr(obj, "cache"):
-            for key, compiled in obj.cache.items():
-                if hasattr(compiled, "metadata"):
-                    m = compiled.metadata
-                    metadata["num_warps"] = getattr(m, "num_warps", None)
-                    metadata["num_stages"] = getattr(m, "num_stages", None)
-                    metadata["shared_mem_bytes"] = getattr(m, "shared", None)
+        if not (callable(obj) and hasattr(obj, "cache")):
+            continue
+        cache = obj.cache
+        # Triton 3.x: cache is {device_id: {key: CompiledKernel}}
+        # Triton 2.x: cache is {key: CompiledKernel}
+        compiled = None
+        for v in cache.values():
+            if isinstance(v, dict):
+                # Triton 3.x nested cache — pick the first compiled entry
+                for inner in v.values():
+                    if hasattr(inner, "metadata"):
+                        compiled = inner
+                        break
+            elif hasattr(v, "metadata"):
+                # Triton 2.x flat cache
+                compiled = v
+            if compiled:
+                break
 
-                    if hasattr(compiled, "asm") and "ptx" in compiled.asm:
-                        ptx = compiled.asm["ptx"]
-                        for line in ptx.split("\n"):
-                            if ".reg .f32" in line or "// .register" in line:
-                                pass
-                    break
+        if compiled and hasattr(compiled, "metadata"):
+            m = compiled.metadata
+            metadata["num_warps"] = getattr(m, "num_warps", None)
+            metadata["num_stages"] = getattr(m, "num_stages", None)
+            metadata["shared_mem_bytes"] = getattr(m, "shared", None)
+            # register count from PTX
+            if hasattr(compiled, "asm") and isinstance(compiled.asm, dict) and "ptx" in compiled.asm:
+                for line in compiled.asm["ptx"].split("\n"):
+                    if ".reg .b32" in line or ".reg .f32" in line:
+                        import re
+                        m2 = re.search(r"<(\d+)>", line)
+                        if m2:
+                            metadata["register_count"] = int(m2.group(1))
+                            break
+            break
 
     device_props = torch.cuda.get_device_properties(0)
     num_warps = metadata.get("num_warps", 4)
@@ -631,7 +651,8 @@ def _parse_nsys_gpukernsum(csv_text: str, bytes_accessed: int) -> dict:
         if pct > 0:
             result["sm_active_cycles_pct"] = round(min(pct, 100.0), 1)
 
-    except Exception:
-        pass
+    except Exception as e:
+        import logging
+        logging.warning(f"nsys CSV parse failed: {e}. CSV head: {csv_text[:300]!r}")
 
     return result
