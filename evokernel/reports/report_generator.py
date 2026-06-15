@@ -60,9 +60,11 @@ def generate_report(
     lines.append("| Generation | Best Latency (µs) | Candidates | Passed Verify |")
     lines.append("|------------|-------------------|------------|----------------|")
     for s in summary:
+        lat = s['best_latency_us']
+        lat_str = f"{lat:.1f}" if lat is not None else "—"
         lines.append(
             f"| {s['generation']} | "
-            f"{s['best_latency_us']:.1f} | "
+            f"{lat_str} | "
             f"{s['total']} | "
             f"{s['passed']} |"
         )
