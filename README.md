@@ -93,9 +93,19 @@ Search results are written to [`results/`](results/) after each generation and c
 Launch an A100/H100 pod using the **RunPod PyTorch** template. In the pod terminal:
 
 ```bash
-apt-get update -y && apt-get install -y nsight-compute
+# nsight-compute is a virtual package — install a specific version
+apt-get update -y && apt-get install -y nsight-compute-2024.3.2
+
+# Verify ncu works
+ncu --version
+
+# Clone the repo
 git clone https://github.com/vibha-ctrl/EvoKernel.git /workspace/EvoKernel
+
+# Install GPU server dependencies
 pip install -r /workspace/EvoKernel/gpu_server/requirements.txt
+
+# Start the server (leave this terminal open)
 cd /workspace/EvoKernel/gpu_server
 uvicorn server:app --host 0.0.0.0 --port 8000
 ```
