@@ -34,7 +34,7 @@ def generate_report(
     lines.append(f"| Best latency | **{best.latency_us:.1f} µs** |")
     lines.append(f"| Speedup | **{speedup:.2f}x** |" if speedup else "| Speedup | N/A |")
     lines.append(f"| Best candidate | `{best.label}` |")
-    lines.append(f"| Generations run | {len(summary)} |")
+    lines.append(f"| Tool calls used | {len(summary)} |")
     total_candidates = sum(s.get("total", 0) for s in summary)
     lines.append(f"| Total candidates evaluated | {total_candidates} |")
     lines.append("")
@@ -44,15 +44,15 @@ def generate_report(
     lines.append(_ascii_chart(summary))
     lines.append("")
 
-    lines.append("## Generation-by-Generation Results")
+    lines.append("## Candidates by Tool Call")
     lines.append("")
-    lines.append("| Generation | Best Latency (µs) | Candidates | Passed Verify |")
-    lines.append("|------------|-------------------|------------|----------------|")
+    lines.append("| Tool Call | Best Latency (µs) | Candidates | Passed Verify |")
+    lines.append("|-----------|-------------------|------------|----------------|")
     for s in summary:
         lat = s['best_latency_us']
         lat_str = f"{lat:.1f}" if lat is not None else "—"
         lines.append(
-            f"| {s['generation']} | "
+            f"| {s['tool_call']} | "
             f"{lat_str} | "
             f"{s['total']} | "
             f"{s['passed']} |"
@@ -63,10 +63,6 @@ def generate_report(
     lines.append("")
     lines.append(f"**Candidate:** `{best.label}`  ")
     lines.append(f"**Latency:** {best.latency_us:.1f} µs  ")
-    if best.throughput_gb_s:
-        lines.append(f"**Throughput:** {best.throughput_gb_s:.0f} GB/s  ")
-    if best.bandwidth_utilization_pct:
-        lines.append(f"**Bandwidth utilization:** {best.bandwidth_utilization_pct:.0f}%  ")
     lines.append("")
 
     lines.append("### Triton Parameters")
@@ -133,7 +129,7 @@ def _ascii_chart(summary: list[dict]) -> str:
             continue
         bar_len = int((lat / max_lat) * bar_width)
         bar = "█" * bar_len
-        lines.append(f"  Gen {s['generation']:2d} | {bar:<{bar_width}} {lat:.1f}")
+        lines.append(f"  Call {s['tool_call']:2d} | {bar:<{bar_width}} {lat:.1f}")
     lines.append("```")
     return "\n".join(lines)
 
@@ -143,14 +139,20 @@ def _optimization_journey(
     kernel_type: str,
     summary: list[dict],
 ) -> str:
+    baseline_lat = None
+    best_lat = None
     lines = []
-    prev_latency = None
     for s in summary:
-        gen = s["generation"]
         lat = s.get("best_latency_us")
         if lat is None:
             continue
-        delta = f"({(prev_latency - lat) / prev_latency * 100:+.1f}%)" if prev_latency else "(baseline)"
-        lines.append(f"- **Generation {gen}**: {lat:.1f} µs {delta}")
-        prev_latency = lat
+        if baseline_lat is None:
+            baseline_lat = lat
+            lines.append(f"- **Tool call {s['tool_call']}**: {lat:.1f} µs (baseline)")
+            best_lat = lat
+            continue
+        if lat < best_lat:
+            delta = (baseline_lat - lat) / baseline_lat * 100
+            lines.append(f"- **Tool call {s['tool_call']}**: {lat:.1f} µs — new best ({delta:+.1f}% vs baseline)")
+            best_lat = lat
     return "\n".join(lines)

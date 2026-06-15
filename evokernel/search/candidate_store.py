@@ -209,7 +209,7 @@ class CandidateStore:
     def generation_summary(self, kernel_type: str) -> list[dict]:
         with self._conn() as conn:
             rows = conn.execute(
-                """SELECT generation, MIN(latency_us) as best_latency_us, COUNT(*) as total,
+                """SELECT generation as tool_call, MIN(latency_us) as best_latency_us, COUNT(*) as total,
                           SUM(CASE WHEN verify_passed=1 THEN 1 ELSE 0 END) as passed
                    FROM candidates WHERE kernel_type=?
                    GROUP BY generation ORDER BY generation ASC""",

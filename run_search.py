@@ -72,22 +72,6 @@ def search(
         console.print(f"Final speedup: [bold green]{result['speedup']:.2f}x[/bold green]")
 
 
-@app.command()
-def report_only(
-    kernel_type: str = typer.Argument(..., help="Kernel type to report on"),
-    db: str = typer.Option("evokernel.db", "--db"),
-):
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    os.makedirs("results", exist_ok=True)
-    output = f"results/{kernel_type}_report_{timestamp}.md"
-    store = CandidateStore(db)
-    result = generate_report(store, kernel_type, output)
-    if "error" in result:
-        console.print(f"[red]{result['error']}[/red]")
-    else:
-        console.print(f"[green]Report written to {result['path']}[/green]")
-        console.print(f"Speedup: {result.get('speedup', 'N/A')}x")
-
 
 @app.command()
 def status(

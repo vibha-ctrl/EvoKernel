@@ -126,11 +126,10 @@ pip install -e .
 ### 4. Run
 
 ```bash
-python run_search.py rmsnorm
-python run_search.py rope
-python run_search.py fused_rmsnorm_rope
+python run_search.py search rmsnorm
+python run_search.py search rope
+python run_search.py search fused_rmsnorm_rope
 python run_search.py status rmsnorm        # check progress mid-run
-python run_search.py report-only rmsnorm   # regenerate report from DB
 ```
 
 ---
