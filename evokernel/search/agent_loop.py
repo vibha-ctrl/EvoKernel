@@ -1,39 +1,20 @@
-"""
-Agentic Search Loop — Claude drives the optimization using tool use.
-
-Unlike the evolutionary loop (which has a hardcoded generate→verify→benchmark→profile→repeat
-sequence), here Claude sees a menu of tools and decides:
-
-  - Which strategy to try next
-  - Whether to verify before benchmarking
-  - Whether to profile now or generate more variants first
-  - When it's stuck and should try a fundamentally different approach
-  - When to stop
-
-Claude is the agent. The loop just runs until Claude calls stop_search().
-"""
-
 import json
 import time
 import uuid
 from dataclasses import dataclass
+from datetime import datetime
 
 import anthropic
 import httpx
 from rich.console import Console
 
 from evokernel.search.candidate_store import Candidate, CandidateStore
-from evokernel.reports.results_tracker import write_generation_update, write_summary
 
 console = Console()
 
 MODEL = "claude-opus-4-5"
-MAX_TOOL_CALLS = 80   # hard budget — prevents runaway cost
+MAX_TOOL_CALLS = 80
 
-
-# ---------------------------------------------------------------------------
-# Tool schemas (Anthropic tool use format)
-# ---------------------------------------------------------------------------
 
 TOOLS = [
     {
@@ -167,10 +148,6 @@ TOOLS = [
 ]
 
 
-# ---------------------------------------------------------------------------
-# Agent system prompt
-# ---------------------------------------------------------------------------
-
 AGENT_SYSTEM_PROMPT = """\
 You are an autonomous GPU kernel optimizer. Your goal is to find the fastest correct \
 implementation of a Triton kernel on an NVIDIA A100 80GB GPU.
@@ -200,10 +177,6 @@ Every generated kernel MUST include all imports (torch, triton, triton.language 
 """
 
 
-# ---------------------------------------------------------------------------
-# Agent state
-# ---------------------------------------------------------------------------
-
 @dataclass
 class AgentState:
     kernel_type: str
@@ -218,20 +191,13 @@ class AgentState:
     stop_reason: str = ""
     best_candidate_id: str = ""
 
-    # Pending code buffer: generate_kernel_variant stores code here, other tools read it
-    _pending_codes: dict = None  # candidate_id -> code string
+    _pending_codes: dict = None
 
     def __post_init__(self):
         self._pending_codes = {}
 
 
-# ---------------------------------------------------------------------------
-# Tool execution
-# ---------------------------------------------------------------------------
-
 def _execute_tool(name: str, inputs: dict, state: AgentState) -> str:
-    """Execute a tool call and return a string result for Claude."""
-
     if name == "generate_kernel_variant":
         return _tool_generate(inputs, state)
     elif name == "verify_kernel":
@@ -256,7 +222,6 @@ def _tool_generate(inputs: dict, state: AgentState) -> str:
     parent_id = inputs["parent_candidate_id"]
     strategy = inputs["strategy"]
 
-    # Get parent code
     if parent_id == "baseline":
         parent = state.store.get(state.baseline_id)
     else:
@@ -265,7 +230,6 @@ def _tool_generate(inputs: dict, state: AgentState) -> str:
     if not parent:
         return f"ERROR: parent candidate '{parent_id}' not found."
 
-    # Ask Claude (a fresh minimal call) to generate one variant with this strategy
     import anthropic as _anthropic
     client = _anthropic.Anthropic(api_key=state.api_key)
 
@@ -294,12 +258,10 @@ Rules:
     )
 
     raw = msg.content[0].text
-    # Extract code — strip trailing ``` if present
     code = raw.strip()
     if code.endswith("```"):
         code = code[:-3].strip()
 
-    # Save as pending candidate
     candidate = Candidate(
         code=code,
         kernel_type=state.kernel_type,
@@ -457,10 +419,6 @@ def _tool_get_failed(inputs: dict, state: AgentState) -> str:
     return "\n".join(lines)
 
 
-# ---------------------------------------------------------------------------
-# Main agent loop
-# ---------------------------------------------------------------------------
-
 def run_agentic_search(
     baseline_code: str,
     kernel_type: str,
@@ -468,10 +426,6 @@ def run_agentic_search(
     anthropic_api_key: str,
     db_path: str = "evokernel.db",
 ) -> Candidate:
-    """
-    Run the agentic search. Claude drives the loop via tool use.
-    Returns the best Candidate found.
-    """
     store = CandidateStore(db_path)
     http_client = httpx.Client(base_url=runpod_url, timeout=300.0)
 
@@ -480,7 +434,6 @@ def run_agentic_search(
     console.print(f"  Mode        : [bold magenta]AGENTIC[/bold magenta] — Claude drives the loop")
     console.print(f"  Max calls   : {MAX_TOOL_CALLS}")
 
-    # ---- Establish baseline ----
     baseline = Candidate(code=baseline_code, kernel_type=kernel_type, generation=0)
     store.save(baseline)
 
@@ -507,7 +460,6 @@ def run_agentic_search(
     baseline = store.get(baseline.id)
     console.print(f"  Baseline: [green]{baseline.latency_us:.1f} µs[/green]")
 
-    # ---- Get GPU info ----
     gpu_name, peak_bw = "A100", 2000.0
     try:
         hdata = http_client.get("/health").json()
@@ -531,7 +483,6 @@ def run_agentic_search(
         best_candidate_id=baseline.id,
     )
 
-    # ---- Build initial message ----
     initial_message = f"""\
 Optimize this {kernel_type} Triton kernel to run as fast as possible on {gpu_name} \
 (peak memory bandwidth: {peak_bw:.0f} GB/s).
@@ -549,7 +500,6 @@ Decide your own strategy. Stop when you've found a good speedup or exhausted app
     messages = [{"role": "user", "content": initial_message}]
     client = anthropic.Anthropic(api_key=anthropic_api_key)
 
-    # ---- Agentic loop ----
     console.print("\n[bold magenta]Handing control to Claude...[/bold magenta]\n")
 
     while state.tool_calls < MAX_TOOL_CALLS:
@@ -571,7 +521,6 @@ Decide your own strategy. Stop when you've found a good speedup or exhausted app
             console.print(f"[dim]Unexpected stop_reason: {response.stop_reason}[/dim]")
             break
 
-        # Execute all tool calls in this response
         tool_results = []
         for block in response.content:
             if block.type == "tool_use":
@@ -589,7 +538,6 @@ Decide your own strategy. Stop when you've found a good speedup or exhausted app
                 })
 
                 if tool_name == "stop_search":
-                    # Don't continue after stop
                     messages.append({"role": "user", "content": tool_results})
                     break
 
@@ -598,10 +546,11 @@ Decide your own strategy. Stop when you've found a good speedup or exhausted app
         if state.stop_reason:
             break
 
-    # ---- Final results ----
     best_candidates = store.get_best(kernel_type, n=1)
     best = best_candidates[0] if best_candidates else baseline
     speedup = baseline.latency_us / best.latency_us if best.latency_us else 1.0
+
+    _save_trace(messages, kernel_type, state, baseline, best, speedup)
 
     console.rule("[bold green]Agentic Search Complete")
     console.print(f"  Baseline     : {baseline.latency_us:.1f} µs")
@@ -612,3 +561,70 @@ Decide your own strategy. Stop when you've found a good speedup or exhausted app
         console.print(f"  Claude said  : [italic]{state.stop_reason}[/italic]")
 
     return best
+
+
+def _save_trace(
+    messages: list,
+    kernel_type: str,
+    state: AgentState,
+    baseline: Candidate,
+    best: Candidate,
+    speedup: float,
+):
+    import os
+    os.makedirs("results", exist_ok=True)
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    path = f"results/{kernel_type}_trace_{timestamp}.md"
+
+    lines = []
+    lines.append(f"# {kernel_type} — Agent Trace")
+    lines.append(f"*{datetime.now().strftime('%Y-%m-%d %H:%M')}  |  GPU: {state.gpu_name}*")
+    lines.append("")
+    lines.append("## Result")
+    lines.append("")
+    lines.append(f"| Metric | Value |")
+    lines.append(f"|--------|-------|")
+    lines.append(f"| Baseline latency | {baseline.latency_us:.1f} µs |")
+    lines.append(f"| Best latency | **{best.latency_us:.1f} µs** |")
+    lines.append(f"| Speedup | **{speedup:.2f}x** |")
+    lines.append(f"| Tool calls used | {state.tool_calls} |")
+    if state.stop_reason:
+        lines.append(f"| Claude's reason for stopping | *{state.stop_reason}* |")
+    lines.append("")
+    lines.append("## Reasoning & Tool Call Trace")
+    lines.append("")
+
+    call_num = 0
+    for msg in messages:
+        role = msg.get("role")
+        content = msg.get("content")
+
+        if role == "assistant":
+            if isinstance(content, list):
+                for block in content:
+                    if hasattr(block, "type"):
+                        if block.type == "text" and block.text.strip():
+                            lines.append(f"**Claude:** {block.text.strip()}")
+                            lines.append("")
+                        elif block.type == "tool_use":
+                            call_num += 1
+                            inputs_str = json.dumps(block.input, indent=2)
+                            lines.append(f"**Tool call {call_num}: `{block.name}`**")
+                            lines.append(f"```json")
+                            lines.append(inputs_str)
+                            lines.append("```")
+                            lines.append("")
+
+        elif role == "user":
+            if isinstance(content, list):
+                for block in content:
+                    if isinstance(block, dict) and block.get("type") == "tool_result":
+                        lines.append(f"**Result:**")
+                        lines.append(f"> {str(block.get('content', '')).strip()}")
+                        lines.append("")
+
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+
+    console.print(f"  Trace saved  : [dim]{path}[/dim]")

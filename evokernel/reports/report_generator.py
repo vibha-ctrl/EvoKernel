@@ -1,13 +1,3 @@
-"""
-Report Generator — produces a Markdown summary of a completed search run.
-
-Includes:
-  - Performance progression per generation (ASCII chart)
-  - Best kernel source code
-  - Comparison table: baseline vs random-equivalent vs EvoKernel best
-  - Winning optimization techniques identified
-"""
-
 from pathlib import Path
 from typing import Optional
 
@@ -19,7 +9,6 @@ def generate_report(
     kernel_type: str,
     output_path: str = "report.md",
 ) -> dict:
-    """Write a Markdown report and return summary stats."""
     summary = store.generation_summary(kernel_type)
     best_list = store.get_best(kernel_type, n=1)
     if not best_list:
@@ -125,7 +114,6 @@ def generate_report(
 
 
 def _ascii_chart(summary: list[dict]) -> str:
-    """Simple ASCII bar chart of best latency per generation."""
     if not summary:
         return ""
 
@@ -155,7 +143,6 @@ def _optimization_journey(
     kernel_type: str,
     summary: list[dict],
 ) -> str:
-    """Describe what changed from generation to generation."""
     lines = []
     prev_latency = None
     for s in summary:

@@ -1,10 +1,3 @@
-"""
-Baseline RoPE (Rotary Positional Embedding) Triton kernel.
-
-Applies rotary embeddings to query and key tensors.
-Interface contract: run(q, k, cos, sin) -> (q_out, k_out)
-"""
-
 import torch
 import triton
 import triton.language as tl
@@ -23,7 +16,6 @@ def _rope_kernel(
     head_dim,
     BLOCK_SIZE: tl.constexpr,
 ):
-    # Each program handles one (sequence position, head) pair
     pid = tl.program_id(0)
     seq_idx = pid // n_heads
     head_idx = pid % n_heads
@@ -37,7 +29,6 @@ def _rope_kernel(
     base_cos = Cos + seq_idx * head_dim
     base_sin = Sin + seq_idx * head_dim
 
-    # Load first half and second half
     q0 = tl.load(base_q + cols, mask=mask, other=0.0).to(tl.float32)
     q1 = tl.load(base_q + cols + half_dim, mask=mask, other=0.0).to(tl.float32)
     k0 = tl.load(base_k + cols, mask=mask, other=0.0).to(tl.float32)
@@ -46,7 +37,6 @@ def _rope_kernel(
     cos = tl.load(base_cos + cols, mask=mask, other=1.0).to(tl.float32)
     sin = tl.load(base_sin + cols, mask=mask, other=0.0).to(tl.float32)
 
-    # Apply rotation: [x0, x1] -> [x0*cos - x1*sin, x0*sin + x1*cos]
     rq0 = q0 * cos - q1 * sin
     rq1 = q0 * sin + q1 * cos
     rk0 = k0 * cos - k1 * sin
@@ -67,16 +57,6 @@ def run(
     cos: torch.Tensor,
     sin: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """
-    Args:
-        q:   [seq_len, n_heads, head_dim] float16
-        k:   [seq_len, n_heads, head_dim] float16
-        cos: [seq_len, head_dim] float16
-        sin: [seq_len, head_dim] float16
-
-    Returns:
-        (q_out, k_out): same shape as q, k
-    """
     assert q.is_cuda
     seq_len, n_heads, head_dim = q.shape
     half_dim = head_dim // 2

@@ -1,28 +1,11 @@
-"""
-EvoKernel — Main Entry Point
-
-Usage:
-  python run_search.py rmsnorm
-  python run_search.py rope --generations 8 --candidates 10
-  python run_search.py fused_rmsnorm_rope --top-k 3
-
-Before running:
-  1. Start a RunPod pod with an A100 / H100 / A10G
-  2. SSH in and start the GPU server:
-       pip install -r gpu_server/requirements.txt
-       cd gpu_server && uvicorn server:app --host 0.0.0.0 --port 8000
-  3. Set RUNPOD_SERVER_URL and ANTHROPIC_API_KEY in .env
-"""
-
 import os
-import sys
+from datetime import datetime
 from pathlib import Path
 
 import typer
 from dotenv import load_dotenv
 from rich.console import Console
 
-from evokernel.search.evolutionary import SearchConfig, run_search
 from evokernel.search.agent_loop import run_agentic_search
 from evokernel.reports.report_generator import generate_report
 from evokernel.search.candidate_store import CandidateStore
@@ -44,46 +27,13 @@ def search(
         ...,
         help="Kernel to optimize: rmsnorm | rope | fused_rmsnorm_rope",
     ),
-    generations: int = typer.Option(
-        int(os.getenv("MAX_GENERATIONS", "10")),
-        "--generations", "-g",
-        help="Maximum number of evolutionary generations",
-    ),
-    candidates: int = typer.Option(
-        int(os.getenv("CANDIDATES_PER_GENERATION", "10")),
-        "--candidates", "-c",
-        help="Candidate variants to generate per generation",
-    ),
-    top_k: int = typer.Option(
-        int(os.getenv("TOP_K", "3")),
-        "--top-k", "-k",
-        help="Top candidates to keep per generation",
-    ),
-    convergence: float = typer.Option(
-        float(os.getenv("CONVERGENCE_THRESHOLD_PCT", "2.0")),
-        "--convergence",
-        help="Stop if improvement < this percentage",
-    ),
     db: str = typer.Option("evokernel.db", "--db", help="SQLite database path"),
-    report: str = typer.Option("report.md", "--report", help="Output report path"),
-    sequential: bool = typer.Option(
-        False, "--sequential",
-        help="Run verify/benchmark sequentially (slower, less GPU pressure)",
-    ),
-    agentic: bool = typer.Option(
-        False, "--agentic",
-        help="Use agentic mode: Claude drives the loop via tool use instead of a fixed evolutionary schedule",
-    ),
 ):
-    """Run the evolutionary kernel optimization search."""
-
-    # Validate kernel type
     if kernel_type not in KERNEL_BASELINES:
         console.print(f"[red]Unknown kernel type: {kernel_type}[/red]")
         console.print(f"Choose from: {', '.join(KERNEL_BASELINES)}")
         raise typer.Exit(1)
 
-    # Check required env vars
     runpod_url = os.getenv("RUNPOD_SERVER_URL", "")
     anthropic_key = os.getenv("ANTHROPIC_API_KEY", "")
 
@@ -96,7 +46,6 @@ def search(
         console.print("[red]ANTHROPIC_API_KEY not set.[/red]")
         raise typer.Exit(1)
 
-    # Load baseline
     baseline_path = Path(KERNEL_BASELINES[kernel_type])
     if not baseline_path.exists():
         console.print(f"[red]Baseline not found: {baseline_path}[/red]")
@@ -104,33 +53,20 @@ def search(
 
     baseline_code = baseline_path.read_text()
 
-    # Run search
-    if agentic:
-        best = run_agentic_search(
-            baseline_code=baseline_code,
-            kernel_type=kernel_type,
-            runpod_url=runpod_url,
-            anthropic_api_key=anthropic_key,
-            db_path=db,
-        )
-    else:
-        config = SearchConfig(
-            kernel_type=kernel_type,
-            max_generations=generations,
-            candidates_per_generation=candidates,
-            top_k=top_k,
-            convergence_threshold_pct=convergence,
-            runpod_url=runpod_url,
-            anthropic_api_key=anthropic_key,
-            db_path=db,
-            parallel_verify=not sequential,
-            parallel_benchmark=not sequential,
-        )
-        best = run_search(baseline_code, config)
+    best = run_agentic_search(
+        baseline_code=baseline_code,
+        kernel_type=kernel_type,
+        runpod_url=runpod_url,
+        anthropic_api_key=anthropic_key,
+        db_path=db,
+    )
 
-    # Generate report
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    os.makedirs("results", exist_ok=True)
+    report_path = f"results/{kernel_type}_report_{timestamp}.md"
+
     store = CandidateStore(db)
-    result = generate_report(store, kernel_type, report)
+    result = generate_report(store, kernel_type, report_path)
     console.print(f"\n[bold green]Report written:[/bold green] {result['path']}")
     if result.get("speedup"):
         console.print(f"Final speedup: [bold green]{result['speedup']:.2f}x[/bold green]")
@@ -140,9 +76,10 @@ def search(
 def report_only(
     kernel_type: str = typer.Argument(..., help="Kernel type to report on"),
     db: str = typer.Option("evokernel.db", "--db"),
-    output: str = typer.Option("report.md", "--output"),
 ):
-    """Generate a report from an existing database without running a new search."""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    os.makedirs("results", exist_ok=True)
+    output = f"results/{kernel_type}_report_{timestamp}.md"
     store = CandidateStore(db)
     result = generate_report(store, kernel_type, output)
     if "error" in result:
@@ -157,7 +94,6 @@ def status(
     kernel_type: str = typer.Argument(...),
     db: str = typer.Option("evokernel.db", "--db"),
 ):
-    """Show current search progress from the database."""
     from rich.table import Table
 
     store = CandidateStore(db)

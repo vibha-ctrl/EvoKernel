@@ -1,14 +1,3 @@
-"""
-Baseline fused RMSNorm + RoPE Triton kernel.
-
-Fuses both operations in a single kernel pass:
-  1. RMSNorm on input X
-  2. Apply RoPE to the normalized Q/K head slices
-
-Avoids writing intermediate normalized tensor to DRAM.
-Interface contract: run(x, weight, cos, sin, n_heads, eps) -> (q_out, k_out)
-"""
-
 import torch
 import triton
 import triton.language as tl
@@ -28,26 +17,19 @@ def _fused_rmsnorm_rope_kernel(
     eps,
     BLOCK_SIZE: tl.constexpr,
 ):
-    """
-    Each program handles one row (one token).
-    Row layout: [q_head_0 | q_head_1 | ... | k_head_0 | k_head_1 | ...]
-    Total width N = 2 * n_heads * head_dim  (Q + K concatenated)
-    """
     row = tl.program_id(0)
     X_row = X + row * N
 
     cols = tl.arange(0, BLOCK_SIZE)
     mask = cols < N
 
-    # Step 1: load full row and compute RMSNorm
     x = tl.load(X_row + cols, mask=mask, other=0.0).to(tl.float32)
     w = tl.load(W + cols, mask=mask, other=1.0).to(tl.float32)
 
     var = tl.sum(x * x, axis=0) / N
     rstd = tl.rsqrt(var + eps)
-    x_norm = x * rstd * w  # normalized, still float32
+    x_norm = x * rstd * w
 
-    # Step 2: apply RoPE to Q portion (first n_heads * head_dim elements)
     q_size = n_heads * head_dim
     half_dim = head_dim // 2
 
@@ -55,8 +37,7 @@ def _fused_rmsnorm_rope_kernel(
     cos_base = Cos + seq_idx * head_dim
     sin_base = Sin + seq_idx * head_dim
 
-    # Process each head's Q
-    for h in tl.static_range(0, 1):  # unrolled at generation time
+    for h in tl.static_range(0, 1):
         for hi in range(n_heads):
             h_offset = hi * head_dim
             h_cols = tl.arange(0, BLOCK_SIZE // (n_heads * 2))
@@ -79,7 +60,6 @@ def _fused_rmsnorm_rope_kernel(
             tl.store(out_base + h_cols, rq0.to(tl.float16), mask=h_mask)
             tl.store(out_base + h_cols + half_dim, rq1.to(tl.float16), mask=h_mask)
 
-    # Process each head's K (starts at q_size offset in X)
     for hi in range(n_heads):
         h_offset = q_size + hi * head_dim
         h_cols = tl.arange(0, BLOCK_SIZE // (n_heads * 2))
@@ -111,17 +91,6 @@ def run(
     n_heads: int = 32,
     eps: float = 1e-5,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """
-    Args:
-        x:       [seq_len, N]    float16  where N = 2 * n_heads * head_dim
-        weight:  [N]             float16
-        cos:     [seq_len, head_dim] float16
-        sin:     [seq_len, head_dim] float16
-        n_heads: number of attention heads
-
-    Returns:
-        (q_out, k_out): each [seq_len, n_heads, head_dim] float16
-    """
     assert x.is_cuda
     seq_len, N = x.shape
     head_dim = N // (2 * n_heads)

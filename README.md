@@ -1,11 +1,11 @@
 # EvoKernel
 
-Autonomous Triton kernel optimization via hardware-guided evolutionary search.
+Autonomous Triton kernel optimization via hardware-guided agentic search.
 
 > **Status:** Framework complete. GPU runs pending — results will appear in [`results/`](results/) after RunPod execution.
 
 ```
-Generate → Verify → Benchmark → Profile → Select → Mutate → Repeat
+Generate → Verify → Benchmark → Profile → Reason → Repeat
 ```
 
 ---
@@ -14,7 +14,7 @@ Generate → Verify → Benchmark → Profile → Select → Mutate → Repeat
 
 Traditional GPU kernel optimization is a manual loop: write → benchmark → profile → modify → repeat. EvoKernel automates this entirely.
 
-An LLM (Claude claude-opus-4-5) acts as the optimization engineer — generating kernel variants, reading real hardware profiler output, and proposing targeted improvements. The GPU is the source of truth. The fastest correct kernel wins each generation.
+Claude (claude-opus-4-5) acts as an autonomous optimization engineer. It decides its own strategy, generates kernel variants, reads real hardware profiler output, and drives the entire search loop via tool calls. The GPU is the source of truth. The fastest correct kernel wins.
 
 ---
 
@@ -22,19 +22,17 @@ An LLM (Claude claude-opus-4-5) acts as the optimization engineer — generating
 
 ```
 Local machine
-  ├── run_search.py          orchestrates the evolutionary loop
-  ├── evokernel/agents/      Claude claude-opus-4-5 generator + critic
-  ├── evokernel/search/      search engine + SQLite candidate store
-  ├── evokernel/mcp/         MCP tool server for interactive use
-  └── evokernel/reports/     live Markdown results + final report
+  ├── run_search.py          CLI entry point
+  ├── evokernel/search/      agentic loop + SQLite candidate store
+  └── evokernel/reports/     final report generator
         │
         │  HTTP (FastAPI)
         ▼
 RunPod Pod (A100 / H100)
   └── gpu_server/server.py
         ├── POST /verify      3-stage correctness gate vs PyTorch reference
-        ├── POST /benchmark   CUDA events + triton.testing.do_bench (100 reps)
-        └── POST /profile     real ncu (Nsight Compute) — required, no fallback
+        ├── POST /benchmark   triton.testing.do_bench (25 warmup + 100 reps)
+        └── POST /profile     nsys (Nsight Systems) + Triton compiler metadata
 ```
 
 ---
@@ -47,42 +45,31 @@ RunPod Pod (A100 / H100)
 | `rope` | Rotary positional encoding | indexing efficiency, memory access patterns |
 | `fused_rmsnorm_rope` | RMSNorm + RoPE in a single kernel pass | fusion, launch overhead, memory traffic |
 
-All three are core LLM inference primitives used in LLaMA, Mistral, and similar architectures.
+All three are core LLM inference primitives used in LLaMA, Mistral, and similar architectures. Each has a hand-written baseline Triton kernel that is intentionally unoptimized — it establishes the starting latency that all variants are measured against.
 
 ---
 
 ## How the Search Works
 
-**Generation 0:** Baseline Triton kernel benchmarked on GPU — establishes starting latency.
+Claude is given the baseline kernel code and access to 7 tools. It drives the entire loop autonomously:
 
-**Each generation:**
-1. **Critic** (Claude) reads ncu profiler output → diagnoses bottleneck → produces optimization hints
-2. **Generator** (Claude) mutates top-k parents guided by hints → produces N new variants
-3. All variants run through a **3-stage correctness gate**: syntax check → runtime check → `torch.allclose` vs PyTorch reference
-4. Passing variants **benchmarked**: 25 warmup + 100 timed reps, median latency reported
-5. **Top-k survivors** profiled with ncu (occupancy, DRAM utilization, warp stall reasons)
-6. Repeat until improvement < 2% per generation
+1. **Generate** — writes a new variant mutated from a chosen parent, with a chosen strategy
+2. **Verify** — 3-stage correctness gate: syntax → runtime → `torch.allclose` vs PyTorch reference
+3. **Benchmark** — 25 warmup + 100 timed reps, median latency reported
+4. **Profile** — Nsight Systems (`nsys`) for DRAM utilization and SM throughput; Triton compiler cache for `num_warps`, `num_stages`, occupancy
+5. **Get history** — review past candidates and failures to avoid repeating mistakes
+6. **Stop** — Claude decides when it has found a good speedup or exhausted strategies
 
-**Convergence** is automatic — typically 4–6 generations before diminishing returns.
-
----
-
-## Profiling
-
-ncu (Nsight Compute) is **required** — no fallback. The server refuses to start without it.
-
-Metrics collected per candidate:
-- Latency (µs), throughput (GB/s), bandwidth utilization %
-- Register count, shared memory, `num_warps`, `num_stages`
-- Theoretical occupancy
-- DRAM utilization %, L1 cache hit rate %
-- Warp stall reasons: memory dependency, long scoreboard
+Claude chooses which parent to build on, when to profile, and when to stop. The search runs for up to 80 tool calls.
 
 ---
 
 ## Results
 
-Search results are written to [`results/`](results/) after each generation and committed to this repo. Check there for live speedup numbers once GPU runs complete.
+Each run writes two files to [`results/`](results/), named with kernel type and timestamp so nothing is ever overwritten:
+
+- `{kernel}_trace_{timestamp}.md` — Claude's full reasoning, every tool call in order, and every GPU result
+- `{kernel}_report_{timestamp}.md` — performance summary: speedup, latency progression, best kernel code and hardware metrics
 
 ---
 
@@ -93,11 +80,11 @@ Search results are written to [`results/`](results/) after each generation and c
 Launch an A100/H100 pod using the **RunPod PyTorch** template (1 GPU). In the pod web terminal:
 
 ```bash
-# nsight-compute is a virtual package — must specify version
-apt-get update -y && apt-get install -y nsight-compute-2024.3.2
+# Install Nsight Systems
+apt-get update -y && apt-get install -y nsight-systems
 
-# Verify ncu works
-ncu --version
+# Verify nsys works
+nsys --version
 
 # Clone the repo
 git clone https://github.com/vibha-ctrl/EvoKernel.git /workspace/EvoKernel
@@ -136,25 +123,15 @@ cp .env.example .env
 pip install -e .
 ```
 
-### 3. Run
+### 4. Run
 
 ```bash
 python run_search.py rmsnorm
-python run_search.py rope --generations 8
+python run_search.py rope
 python run_search.py fused_rmsnorm_rope
 python run_search.py status rmsnorm        # check progress mid-run
 python run_search.py report-only rmsnorm   # regenerate report from DB
 ```
-
----
-
-## MCP Server
-
-```bash
-fastmcp run evokernel/mcp/server.py
-```
-
-Exposes: `verify_kernel`, `benchmark_kernel`, `profile_kernel`, `retrieve_history`, `generate_report`, `gpu_status`
 
 ---
 
@@ -166,19 +143,14 @@ EvoKernel/
 ├── gpu_server/
 │   └── server.py                       FastAPI GPU server — runs on RunPod
 ├── evokernel/
-│   ├── agents/
-│   │   ├── generator.py                LLM kernel variant generator
-│   │   └── critic.py                   LLM profiler output interpreter
 │   ├── kernels/
-│   │   ├── rmsnorm/                    baseline + PyTorch reference
-│   │   ├── rope/                       baseline + PyTorch reference
-│   │   └── fused_rmsnorm_rope/         baseline + PyTorch reference
+│   │   ├── rmsnorm/baseline.py         intentionally naive starting kernel
+│   │   ├── rope/baseline.py
+│   │   └── fused_rmsnorm_rope/baseline.py
 │   ├── search/
-│   │   ├── evolutionary.py             main search loop
-│   │   └── candidate_store.py          SQLite persistence
-│   ├── mcp/server.py                   MCP tool server
+│   │   ├── agent_loop.py               agentic loop — Claude drives via tool use
+│   │   └── candidate_store.py          SQLite persistence for all candidates
 │   └── reports/
-│       ├── report_generator.py         final Markdown report
-│       └── results_tracker.py          live per-generation results writer
-└── results/                            search results (updated each run)
+│       └── report_generator.py         final Markdown report
+└── results/                            per-run trace + report (timestamped)
 ```

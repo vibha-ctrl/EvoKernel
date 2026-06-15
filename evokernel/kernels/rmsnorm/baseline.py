@@ -1,10 +1,3 @@
-"""
-Baseline RMSNorm Triton kernel.
-
-This is the untuned starting point for the evolutionary search.
-Interface contract: every candidate must expose run(x, weight, eps) -> Tensor.
-"""
-
 import torch
 import triton
 import triton.language as tl
@@ -37,15 +30,6 @@ def _rmsnorm_kernel(
 
 
 def run(x: torch.Tensor, weight: torch.Tensor, eps: float = 1e-5) -> torch.Tensor:
-    """
-    Args:
-        x:      [M, N] float16
-        weight: [N]    float16
-        eps:    float
-
-    Returns:
-        y: [M, N] float16
-    """
     assert x.is_cuda and weight.is_cuda
     M, N = x.shape
     y = torch.empty_like(x)

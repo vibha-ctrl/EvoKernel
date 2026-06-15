@@ -1,11 +1,3 @@
-"""
-Candidate Store — SQLite-backed persistence for the search state.
-
-Stores every candidate (pass/fail/benchmark/profile) across all generations
-so the generator can learn from the full history and the report generator
-can reconstruct the search tree.
-"""
-
 import json
 import sqlite3
 import uuid
@@ -22,23 +14,19 @@ class Candidate:
     generation: int
     parent_id: Optional[str] = None
 
-    # Set at creation
     id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
     created_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
 
-    # Verification
     verify_passed: Optional[bool] = None
     verify_error_type: Optional[str] = None
     verify_error_msg: Optional[str] = None
     verify_max_error: Optional[float] = None
 
-    # Benchmark
     latency_us: Optional[float] = None
     latency_p99_us: Optional[float] = None
     throughput_gb_s: Optional[float] = None
     bandwidth_utilization_pct: Optional[float] = None
 
-    # Profile
     num_warps: Optional[int] = None
     num_stages: Optional[int] = None
     shared_mem_bytes: Optional[int] = None
@@ -114,14 +102,8 @@ class CandidateStore:
         with self._conn() as conn:
             conn.execute(CREATE_TABLE)
 
-    # ------------------------------------------------------------------
-    # Write
-    # ------------------------------------------------------------------
-
     def save(self, c: Candidate):
-        """Insert or replace a candidate record."""
         d = asdict(c)
-        # SQLite doesn't have bool — convert
         d["verify_passed"] = int(c.verify_passed) if c.verify_passed is not None else None
 
         cols = ", ".join(d.keys())
@@ -166,10 +148,6 @@ class CandidateStore:
                 [*updates.values(), candidate_id],
             )
 
-    # ------------------------------------------------------------------
-    # Read
-    # ------------------------------------------------------------------
-
     def get(self, candidate_id: str) -> Candidate | None:
         with self._conn() as conn:
             row = conn.execute("SELECT * FROM candidates WHERE id=?",
@@ -185,7 +163,6 @@ class CandidateStore:
         return [_row_to_candidate(r) for r in rows]
 
     def get_best(self, kernel_type: str, n: int = 1) -> list[Candidate]:
-        """Return the n fastest verified+benchmarked candidates."""
         with self._conn() as conn:
             rows = conn.execute(
                 """SELECT * FROM candidates
@@ -214,7 +191,6 @@ class CandidateStore:
         return [_row_to_candidate(r) for r in rows]
 
     def get_all_tried_configs(self, kernel_type: str) -> list[dict]:
-        """Return list of config dicts for all benchmarked candidates."""
         with self._conn() as conn:
             rows = conn.execute(
                 """SELECT num_warps, num_stages, shared_mem_bytes, latency_us
@@ -231,7 +207,6 @@ class CandidateStore:
         ]
 
     def generation_summary(self, kernel_type: str) -> list[dict]:
-        """Per-generation best latency for progress tracking."""
         with self._conn() as conn:
             rows = conn.execute(
                 """SELECT generation, MIN(latency_us) as best_latency_us, COUNT(*) as total,
