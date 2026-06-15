@@ -90,10 +90,10 @@ Search results are written to [`results/`](results/) after each generation and c
 
 ### 1. RunPod pod
 
-Launch an A100/H100 pod using the **RunPod PyTorch** template. In the pod terminal:
+Launch an A100/H100 pod using the **RunPod PyTorch** template (1 GPU). In the pod web terminal:
 
 ```bash
-# nsight-compute is a virtual package — install a specific version
+# nsight-compute is a virtual package — must specify version
 apt-get update -y && apt-get install -y nsight-compute-2024.3.2
 
 # Verify ncu works
@@ -105,21 +105,34 @@ git clone https://github.com/vibha-ctrl/EvoKernel.git /workspace/EvoKernel
 # Install GPU server dependencies
 pip install -r /workspace/EvoKernel/gpu_server/requirements.txt
 
-# Start the server (leave this terminal open)
+# Start the server — leave this terminal open
 cd /workspace/EvoKernel/gpu_server
 uvicorn server:app --host 0.0.0.0 --port 8000
 ```
 
-Verify setup:
+### 2. SSH tunnel (local machine — new terminal)
+
+Port 8000 is not exposed via RunPod's HTTP proxy. Use SSH port forwarding instead.
+Find your pod's SSH address in RunPod dashboard → Connect → SSH over exposed TCP.
+
 ```bash
-curl https://YOUR_POD_ID-8000.proxy.runpod.net/health
+# Keep this terminal open for the entire search session
+ssh root@<POD_IP> -p <PORT> -i ~/.ssh/id_ed25519 -L 8000:localhost:8000 -N
 ```
 
-### 2. Local environment
+Verify connection:
+```bash
+curl http://localhost:8000/health
+# Should return: {"status":"ok","gpu":"NVIDIA A100-SXM4-80GB",...}
+```
+
+### 3. Local environment
 
 ```bash
 cp .env.example .env
-# Set RUNPOD_SERVER_URL and ANTHROPIC_API_KEY in .env
+# Set in .env:
+#   RUNPOD_SERVER_URL=http://localhost:8000
+#   ANTHROPIC_API_KEY=sk-ant-...
 pip install -e .
 ```
 
