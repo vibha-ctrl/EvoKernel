@@ -65,11 +65,11 @@ def write_generation_update(
         if lat and baseline_latency_us:
             pct = (baseline_latency_us - lat) / baseline_latency_us * 100
             delta = f"{pct:+.1f}%"
+        lat_str = f"{lat:.1f}" if lat else "—"
+        bold = "**" if s['generation'] == generation else ""
         lines.append(
             f"| {s['generation']} | "
-            f"{'**' if s['generation'] == generation else ''}"
-            f"{lat:.1f if lat else '—'}"
-            f"{'**' if s['generation'] == generation else ''} | "
+            f"{bold}{lat_str}{bold} | "
             f"{delta} | "
             f"{s['total']} | "
             f"{s['passed']} |"

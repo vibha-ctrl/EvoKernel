@@ -582,23 +582,27 @@ def _run_ncu(code: str, kernel_type: str) -> dict:
             "--export", str(report_path),
             "--force-overwrite",
             "--target-processes", "all",
+            "--privilege-level", "unrestricted",
             sys.executable, str(script_path),
         ]
 
         try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120, check=True)
-        except subprocess.CalledProcessError as e:
-            raise HTTPException(
-                status_code=500,
-                detail=(
-                    f"ncu exited with code {e.returncode}.\n"
-                    f"stderr: {e.stderr[-1000:]}\n\n"
-                    "Common cause: missing CAP_SYS_ADMIN. "
-                    "Ensure the RunPod pod has privileged access."
-                ),
-            )
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+            # ncu can exit non-zero with warnings but still produce valid output
+            ncu_rep = Path(str(report_path) + ".ncu-rep")
+            if proc.returncode not in (0, 1) and not ncu_rep.exists():
+                raise HTTPException(
+                    status_code=500,
+                    detail=(
+                        f"ncu exited with code {proc.returncode}.\n"
+                        f"stdout: {proc.stdout[-500:]}\n"
+                        f"stderr: {proc.stderr[-1000:]}\n\n"
+                        "Common cause: missing CAP_SYS_ADMIN / --privilege-level unrestricted. "
+                        "Ensure the RunPod pod has privileged container access."
+                    ),
+                )
         except subprocess.TimeoutExpired:
-            raise HTTPException(status_code=500, detail="ncu timed out after 120s.")
+            raise HTTPException(status_code=500, detail="ncu timed out after 180s.")
 
         csv_cmd = [ncu_path, "--import", str(report_path) + ".ncu-rep",
                    "--csv", "--page", "raw"]
