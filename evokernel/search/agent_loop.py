@@ -233,8 +233,9 @@ def _tool_generate(inputs: dict, state: AgentState) -> str:
     import anthropic as _anthropic
     client = _anthropic.Anthropic(api_key=state.api_key)
 
+    latency_str = f"{parent.latency_us:.1f}" if parent.latency_us else "?"
     generation_prompt = f"""\
-Parent kernel ({state.kernel_type}, latency={parent.latency_us:.1f if parent.latency_us else '?'} µs):
+Parent kernel ({state.kernel_type}, latency={latency_str} µs):
 
 ```python
 {parent.code}
@@ -275,7 +276,7 @@ Rules:
     return (
         f"Generated candidate_id={candidate.id}\n"
         f"Strategy applied: {strategy}\n"
-        f"Parent: {parent_id} (latency={parent.latency_us:.1f if parent.latency_us else '?'} µs)\n"
+        f"Parent: {parent_id} (latency={latency_str} µs)\n"
         f"Next step: call verify_kernel(candidate_id='{candidate.id}')"
     )
 
@@ -298,7 +299,7 @@ def _tool_verify(inputs: dict, state: AgentState) -> str:
                                    data.get("error_msg"), data.get("max_error"))
 
         if data["passed"]:
-            console.print(f"  [green]✓[/green] Verified {candidate_id}")
+            console.print(f"  [green]PASS[/green] Verified {candidate_id}")
             return (
                 f"PASSED verification\n"
                 f"candidate_id={candidate_id}\n"
@@ -306,7 +307,7 @@ def _tool_verify(inputs: dict, state: AgentState) -> str:
                 f"Next step: call benchmark_kernel(candidate_id='{candidate_id}')"
             )
         else:
-            console.print(f"  [red]✗[/red] Failed {candidate_id}: {data.get('error_type')}")
+            console.print(f"  [red]FAIL[/red] Failed {candidate_id}: {data.get('error_type')}")
             return (
                 f"FAILED verification\n"
                 f"error_type={data.get('error_type')}\n"
@@ -340,7 +341,7 @@ def _tool_benchmark(inputs: dict, state: AgentState) -> str:
         speedup = state.baseline_latency_us / data["latency_us"]
         delta_pct = (state.baseline_latency_us - data["latency_us"]) / state.baseline_latency_us * 100
         console.print(
-            f"  [cyan]⏱[/cyan] {candidate_id}: {data['latency_us']:.1f} µs  "
+            f"  [cyan]bench[/cyan] {candidate_id}: {data['latency_us']:.1f} us  "
             f"({delta_pct:+.1f}% vs baseline, {speedup:.3f}x)"
         )
         return (
@@ -370,7 +371,7 @@ def _tool_profile(inputs: dict, state: AgentState) -> str:
         resp.raise_for_status()
         data = resp.json()
         state.store.update_profile(c.id, data)
-        console.print(f"  [magenta]📊[/magenta] Profiled {candidate_id}")
+        console.print(f"  [magenta]profile[/magenta] Profiled {candidate_id}")
 
         lines = [f"PROFILED candidate_id={candidate_id}"]
         if data.get("num_warps"):      lines.append(f"num_warps={data['num_warps']}")
