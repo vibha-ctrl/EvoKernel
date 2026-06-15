@@ -312,11 +312,17 @@ torch.cuda.synchronize()
                 "stderr": proc.stderr[-800:],
             }
 
-        stats_cmd = [nsys_path, "stats", "--report", "gpukernsum",
+        report_name = "cuda_gpu_kern_sum"
+        stats_cmd = [nsys_path, "stats", "--report", report_name,
                      "--format", "csv", "--output", "-", str(rep_file)]
         stats = subprocess.run(stats_cmd, capture_output=True, text=True, timeout=30)
+        if "could not be found" in stats.stderr or stats.returncode != 0:
+            report_name = "gpukernsum"
+            stats_cmd[3] = report_name
+            stats = subprocess.run(stats_cmd, capture_output=True, text=True, timeout=30)
         return {
             "nsys_path": nsys_path,
+            "report_name_used": report_name,
             "profile_returncode": proc.returncode,
             "stats_returncode": stats.returncode,
             "csv_output": stats.stdout[:2000],
@@ -689,15 +695,23 @@ def _run_nsys(code: str, kernel_type: str, bytes_accessed: int) -> dict:
         except subprocess.TimeoutExpired:
             raise HTTPException(status_code=500, detail="nsys timed out after 180s.")
 
+        # nsys 2024+ uses "cuda_gpu_kern_sum"; older versions use "gpukernsum"
+        report_name = "cuda_gpu_kern_sum"
         stats_cmd = [
             nsys_path, "stats",
-            "--report", "gpukernsum",
+            "--report", report_name,
             "--format", "csv",
             "--output", "-",
             str(rep_file),
         ]
-        try:
+        stats = subprocess.run(stats_cmd, capture_output=True, text=True, timeout=30)
+        if "could not be found" in stats.stderr or stats.returncode != 0:
+            # Fall back to legacy report name
+            report_name = "gpukernsum"
+            stats_cmd[-3] = report_name
             stats = subprocess.run(stats_cmd, capture_output=True, text=True, timeout=30)
+
+        try:
             return _parse_nsys_gpukernsum(stats.stdout, bytes_accessed)
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"nsys stats failed: {e}")
