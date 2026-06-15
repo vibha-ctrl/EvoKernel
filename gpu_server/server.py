@@ -740,6 +740,13 @@ def _parse_nsys_gpukernsum(csv_text: str, bytes_accessed: int) -> dict:
 
     result: dict = {}
     try:
+        # nsys stats prepends status lines before the CSV — skip to the actual header
+        csv_lines = [l for l in csv_text.splitlines() if l.startswith("Time")]
+        if not csv_lines:
+            return result
+        # Reconstruct CSV from the header line onward
+        header_idx = csv_text.find(csv_lines[0])
+        csv_text = csv_text[header_idx:]
         reader = csv_mod.DictReader(io.StringIO(csv_text))
         rows = list(reader)
         if not rows:
