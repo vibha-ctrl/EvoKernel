@@ -196,13 +196,13 @@ def _get_reference_output(kernel_type: str, inputs: dict[str, Any]):
         return q_rot.half(), k_rot.half()
 
 
-def _exec_candidate(code: str) -> dict:
+def _exec_candidate(code: str) -> tuple[dict, str]:
     """
     Load candidate code from a real temp file so Triton's JIT can read the source.
 
-    Using exec() with filename '<candidate>' causes Triton's @triton.jit decorator
-    to fail with 'could not get source code' because inspect.getsource() requires a
-    real on-disk file. Writing to a .py file and importing via importlib fixes this.
+    Triton's @triton.jit compiles lazily on first kernel call, so the source file
+    must stay on disk until after the first run() call. We return the tmp_path so
+    callers can delete it after execution. Never delete before running the kernel.
     """
     with tempfile.NamedTemporaryFile(
         mode="w", suffix=".py", prefix="evokernel_candidate_",
@@ -211,20 +211,22 @@ def _exec_candidate(code: str) -> dict:
         f.write(code)
         tmp_path = f.name
 
-    try:
-        spec = importlib.util.spec_from_file_location("evokernel_candidate", tmp_path)
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-    finally:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
+    spec = importlib.util.spec_from_file_location("evokernel_candidate", tmp_path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
 
     if not hasattr(mod, "run"):
+        os.unlink(tmp_path)
         raise AttributeError("Candidate code must define a function named 'run'")
 
-    return vars(mod)
+    return vars(mod), tmp_path
+
+
+def _cleanup(tmp_path: str):
+    try:
+        os.unlink(tmp_path)
+    except OSError:
+        pass
 
 
 def _call_run(namespace: dict, kernel_type: str, inputs: dict[str, Any]):
@@ -314,8 +316,9 @@ def verify(req: KernelRequest):
     inputs = _get_test_inputs(req.kernel_type)
 
     # Stage 1 — compile + exec
+    tmp_path = None
     try:
-        namespace = _exec_candidate(req.code)
+        namespace, tmp_path = _exec_candidate(req.code)
     except SyntaxError as e:
         return VerifyResponse(
             candidate_id=req.candidate_id,
@@ -331,18 +334,21 @@ def verify(req: KernelRequest):
             error_msg=str(e),
         )
 
-    # Stage 2 — run on GPU (isolated subprocess to survive CUDA crashes)
+    # Stage 2 — run on GPU; temp file must exist until after first Triton JIT compile
     try:
         torch.cuda.synchronize()
         candidate_out = _call_run(namespace, req.kernel_type, inputs)
         torch.cuda.synchronize()
     except Exception as e:
+        _cleanup(tmp_path)
         return VerifyResponse(
             candidate_id=req.candidate_id,
             passed=False,
             error_type="runtime_error",
             error_msg=traceback.format_exc(limit=5),
         )
+    finally:
+        _cleanup(tmp_path)
 
     # Stage 3 — correctness
     try:
@@ -370,22 +376,24 @@ def benchmark(req: KernelRequest):
     inputs = _get_test_inputs(req.kernel_type)
 
     try:
-        namespace = _exec_candidate(req.code)
+        namespace, tmp_path = _exec_candidate(req.code)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Code error: {e}")
-
-    run_fn = namespace["run"]
 
     def bench_fn():
         return _call_run(namespace, req.kernel_type, inputs)
 
-    # triton.testing.do_bench returns median latency in milliseconds
-    ms, min_ms, max_ms = triton.testing.do_bench(
-        bench_fn,
-        warmup=25,
-        rep=100,
-        quantiles=[0.5, 0.05, 0.95],
-    )
+    try:
+        # triton.testing.do_bench returns median latency in milliseconds
+        ms, min_ms, max_ms = triton.testing.do_bench(
+            bench_fn,
+            warmup=25,
+            rep=100,
+            quantiles=[0.5, 0.05, 0.95],
+        )
+    finally:
+        _cleanup(tmp_path)
+
     latency_us = ms * 1000
     latency_p99_us = max_ms * 1000
 
@@ -416,30 +424,33 @@ def profile(req: KernelRequest):
     inputs = _get_test_inputs(req.kernel_type)
 
     try:
-        namespace = _exec_candidate(req.code)
+        namespace, tmp_path = _exec_candidate(req.code)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Code error: {e}")
 
     result = ProfileResponse(candidate_id=req.candidate_id)
 
-    # --- Triton compiler metadata (register count, shared mem, warps, stages) ---
-    meta = _extract_triton_metadata(req.code, namespace, req.kernel_type, inputs)
-    result.num_warps = meta.get("num_warps")
-    result.num_stages = meta.get("num_stages")
-    result.shared_mem_bytes = meta.get("shared_mem_bytes")
-    result.register_count = meta.get("register_count")
-    result.theoretical_occupancy_pct = meta.get("theoretical_occupancy_pct")
+    try:
+        # --- Triton compiler metadata (register count, shared mem, warps, stages) ---
+        meta = _extract_triton_metadata(req.code, namespace, req.kernel_type, inputs)
+        result.num_warps = meta.get("num_warps")
+        result.num_stages = meta.get("num_stages")
+        result.shared_mem_bytes = meta.get("shared_mem_bytes")
+        result.register_count = meta.get("register_count")
+        result.theoretical_occupancy_pct = meta.get("theoretical_occupancy_pct")
 
-    # --- Quick latency + throughput for critic context ---
-    def bench_fn():
-        return _call_run(namespace, req.kernel_type, inputs)
+        # --- Quick latency + throughput for critic context ---
+        def bench_fn():
+            return _call_run(namespace, req.kernel_type, inputs)
 
-    ms, _, _ = triton.testing.do_bench(bench_fn, warmup=10, rep=50,
-                                        quantiles=[0.5, 0.05, 0.95])
-    result.latency_us = round(ms * 1000, 2)
-    bytes_total = _bytes_accessed(req.kernel_type, inputs)
-    peak_bw = _estimate_peak_bw(torch.cuda.get_device_properties(0).name)
-    result.throughput_gb_s = round((bytes_total / 1e9) / (ms / 1000), 1)
+        ms, _, _ = triton.testing.do_bench(bench_fn, warmup=10, rep=50,
+                                            quantiles=[0.5, 0.05, 0.95])
+        result.latency_us = round(ms * 1000, 2)
+        bytes_total = _bytes_accessed(req.kernel_type, inputs)
+        peak_bw = _estimate_peak_bw(torch.cuda.get_device_properties(0).name)
+        result.throughput_gb_s = round((bytes_total / 1e9) / (ms / 1000), 1)
+    finally:
+        _cleanup(tmp_path)
 
     # --- ncu — required, no fallback ---
     ncu_result = _run_ncu(req.code, req.kernel_type)
