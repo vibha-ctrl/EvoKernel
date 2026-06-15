@@ -32,8 +32,8 @@ def _fused_rmsnorm_rope_kernel(
 
     q_size = n_heads * head_dim
 
-    cos_base = Cos + row * HALF_DIM
-    sin_base = Sin + row * HALF_DIM
+    cos_base = Cos + row * head_dim
+    sin_base = Sin + row * head_dim
 
     h_cols = tl.arange(0, HALF_DIM)
 
