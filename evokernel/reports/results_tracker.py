@@ -137,10 +137,12 @@ def write_summary(store: CandidateStore, kernel_types: list[str]):
         best_list = store.get_best(kt, n=1)
         best_lat = best_list[0].latency_us if best_list else None
         speedup = f"{baseline / best_lat:.2f}x" if baseline and best_lat else "—"
+        baseline_str = f"{baseline:.1f}" if baseline else "—"
+        best_lat_str = f"{best_lat:.1f}" if best_lat else "—"
         lines.append(
             f"| `{kt}` | "
-            f"{baseline:.1f if baseline else '—'} | "
-            f"**{best_lat:.1f if best_lat else '—'}** | "
+            f"{baseline_str} | "
+            f"**{best_lat_str}** | "
             f"**{speedup}** | "
             f"{len(summary) - 1} |"
         )
