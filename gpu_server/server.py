@@ -264,6 +264,109 @@ def health():
     }
 
 
+@app.get("/debug/nsys")
+def debug_nsys():
+    """Run a minimal nsys profile and return raw CSV + any errors for debugging."""
+    nsys_path = _find_nsys()
+    if not nsys_path:
+        return {"error": "nsys not found"}
+
+    minimal_code = """
+import torch
+import triton
+import triton.language as tl
+
+@triton.jit
+def _debug_kernel(X, Y, N, BLOCK: tl.constexpr):
+    pid = tl.program_id(0)
+    offs = pid * BLOCK + tl.arange(0, BLOCK)
+    x = tl.load(X + offs, mask=offs < N)
+    tl.store(Y + offs, x * 2, mask=offs < N)
+
+def run(x):
+    y = torch.empty_like(x)
+    _debug_kernel[(x.numel() // 128,)](x, y, x.numel(), BLOCK=128, num_warps=4)
+    return y
+
+import torch
+x = torch.randn(4096, device='cuda', dtype=torch.float16)
+for _ in range(10): run(x)
+torch.cuda.synchronize()
+"""
+    import tempfile
+    from pathlib import Path as _Path
+    with tempfile.TemporaryDirectory() as tmpdir:
+        script = _Path(tmpdir) / "debug_run.py"
+        report = _Path(tmpdir) / "report"
+        script.write_text(minimal_code)
+        cmd = [nsys_path, "profile", "--trace=cuda", "--output", str(report),
+               "--force-overwrite", "true", sys.executable, str(script)]
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        rep_file = _Path(str(report) + ".nsys-rep")
+
+        if not rep_file.exists():
+            return {
+                "error": "no .nsys-rep produced",
+                "returncode": proc.returncode,
+                "stdout": proc.stdout[-800:],
+                "stderr": proc.stderr[-800:],
+            }
+
+        stats_cmd = [nsys_path, "stats", "--report", "gpukernsum",
+                     "--format", "csv", "--output", "-", str(rep_file)]
+        stats = subprocess.run(stats_cmd, capture_output=True, text=True, timeout=30)
+        return {
+            "nsys_path": nsys_path,
+            "profile_returncode": proc.returncode,
+            "stats_returncode": stats.returncode,
+            "csv_output": stats.stdout[:2000],
+            "stats_stderr": stats.stderr[:500],
+        }
+
+
+@app.get("/debug/triton_cache")
+def debug_triton_cache():
+    """Compile a minimal Triton kernel and dump the cache structure for debugging."""
+    import triton
+    import triton.language as tl
+
+    @triton.jit
+    def _probe(X, N, BLOCK: tl.constexpr):
+        pid = tl.program_id(0)
+        offs = pid * BLOCK + tl.arange(0, BLOCK)
+        x = tl.load(X + offs, mask=offs < N)
+        tl.store(X + offs, x, mask=offs < N)
+
+    x = torch.randn(1024, device="cuda", dtype=torch.float32)
+    _probe[(8,)](x, 1024, BLOCK=128, num_warps=4, num_stages=2)
+    torch.cuda.synchronize()
+
+    cache = _probe.cache
+    info = {"cache_type": type(cache).__name__, "cache_keys": [str(k) for k in list(cache.keys())[:3]]}
+    for k, v in cache.items():
+        if isinstance(v, dict):
+            info["structure"] = "nested"
+            inner_keys = list(v.keys())[:2]
+            info["inner_keys"] = [str(k2) for k2 in inner_keys]
+            for k2, compiled in v.items():
+                info["compiled_type"] = type(compiled).__name__
+                info["has_metadata"] = hasattr(compiled, "metadata")
+                if hasattr(compiled, "metadata"):
+                    m = compiled.metadata
+                    info["metadata_type"] = type(m).__name__
+                    info["metadata_attrs"] = [a for a in dir(m) if not a.startswith("_")]
+                    info["num_warps"] = getattr(m, "num_warps", "MISSING")
+                    info["num_stages"] = getattr(m, "num_stages", "MISSING")
+                    info["shared"] = getattr(m, "shared", "MISSING")
+                break
+        else:
+            info["structure"] = "flat"
+            info["compiled_type"] = type(v).__name__
+            info["has_metadata"] = hasattr(v, "metadata")
+        break
+    return info
+
+
 @app.post("/verify", response_model=VerifyResponse)
 def verify(req: KernelRequest):
     inputs = _get_test_inputs(req.kernel_type)
