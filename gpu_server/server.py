@@ -633,7 +633,7 @@ def _run_nsys(code: str, kernel_type: str, bytes_accessed: int) -> dict:
             nsys_path, "profile",
             "--trace=cuda",
             "--output", str(report_path),
-            "--force-overwrite",
+            "--force-overwrite", "true",
             sys.executable, str(script_path),
         ]
 
