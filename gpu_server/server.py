@@ -40,6 +40,30 @@ def _require_ncu():
             "EvoKernel requires real hardware profiling — no fallback."
         )
 
+
+@app.on_event("startup")
+def _warm_up_gpu():
+    """
+    Drive GPU clocks to sustained boost frequency before any benchmarks run.
+
+    A cold GPU runs at base clock (~1.1 GHz on A100). Under sustained load it
+    boosts to ~1.41 GHz and stays there. Without warmup, generation-0 baseline
+    benchmarks ~10-15% slower than it truly is, making speedup comparisons inaccurate.
+
+    We run 500 back-to-back large matmuls — enough to saturate the SM pipeline
+    and lock clocks into boost state for the rest of the session.
+    """
+    import torch
+    device = "cuda"
+    # Large enough to fully stress all SMs
+    a = torch.randn(4096, 4096, dtype=torch.float16, device=device)
+    b = torch.randn(4096, 4096, dtype=torch.float16, device=device)
+    for _ in range(500):
+        torch.mm(a, b)
+    torch.cuda.synchronize()
+    # Discard tensors — GPU stays warm for the session
+    del a, b
+
 # ---------------------------------------------------------------------------
 # Pydantic models
 # ---------------------------------------------------------------------------
