@@ -195,8 +195,16 @@ class CandidateStore:
             ).fetchall()
         return [_row_to_candidate(r) for r in rows]
 
-    def get_failed(self, kernel_type: str, generation: int) -> list[Candidate]:
+    def get_failed(self, kernel_type: str, generation: int | None = None) -> list[Candidate]:
         with self._conn() as conn:
+            if generation is None:
+                rows = conn.execute(
+                    """SELECT * FROM candidates
+                       WHERE kernel_type=? AND verify_passed=0
+                       ORDER BY created_at ASC""",
+                    (kernel_type,),
+                ).fetchall()
+                return [_row_to_candidate(r) for r in rows]
             rows = conn.execute(
                 """SELECT * FROM candidates
                    WHERE kernel_type=? AND generation=? AND verify_passed=0

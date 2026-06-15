@@ -23,6 +23,7 @@ from dotenv import load_dotenv
 from rich.console import Console
 
 from evokernel.search.evolutionary import SearchConfig, run_search
+from evokernel.search.agent_loop import run_agentic_search
 from evokernel.reports.report_generator import generate_report
 from evokernel.search.candidate_store import CandidateStore
 
@@ -69,6 +70,10 @@ def search(
         False, "--sequential",
         help="Run verify/benchmark sequentially (slower, less GPU pressure)",
     ),
+    agentic: bool = typer.Option(
+        False, "--agentic",
+        help="Use agentic mode: Claude drives the loop via tool use instead of a fixed evolutionary schedule",
+    ),
 ):
     """Run the evolutionary kernel optimization search."""
 
@@ -100,20 +105,28 @@ def search(
     baseline_code = baseline_path.read_text()
 
     # Run search
-    config = SearchConfig(
-        kernel_type=kernel_type,
-        max_generations=generations,
-        candidates_per_generation=candidates,
-        top_k=top_k,
-        convergence_threshold_pct=convergence,
-        runpod_url=runpod_url,
-        anthropic_api_key=anthropic_key,
-        db_path=db,
-        parallel_verify=not sequential,
-        parallel_benchmark=not sequential,
-    )
-
-    best = run_search(baseline_code, config)
+    if agentic:
+        best = run_agentic_search(
+            baseline_code=baseline_code,
+            kernel_type=kernel_type,
+            runpod_url=runpod_url,
+            anthropic_api_key=anthropic_key,
+            db_path=db,
+        )
+    else:
+        config = SearchConfig(
+            kernel_type=kernel_type,
+            max_generations=generations,
+            candidates_per_generation=candidates,
+            top_k=top_k,
+            convergence_threshold_pct=convergence,
+            runpod_url=runpod_url,
+            anthropic_api_key=anthropic_key,
+            db_path=db,
+            parallel_verify=not sequential,
+            parallel_benchmark=not sequential,
+        )
+        best = run_search(baseline_code, config)
 
     # Generate report
     store = CandidateStore(db)
