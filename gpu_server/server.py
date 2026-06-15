@@ -332,45 +332,62 @@ torch.cuda.synchronize()
 
 @app.get("/debug/triton_cache")
 def debug_triton_cache():
-    """Compile a minimal Triton kernel and dump the cache structure for debugging."""
-    import triton
-    import triton.language as tl
+    """Compile a minimal Triton kernel via subprocess and dump cache structure."""
+    probe_code = """
+import torch, triton, triton.language as tl, json, sys
 
-    @triton.jit
-    def _probe(X, N, BLOCK: tl.constexpr):
-        pid = tl.program_id(0)
-        offs = pid * BLOCK + tl.arange(0, BLOCK)
-        x = tl.load(X + offs, mask=offs < N)
-        tl.store(X + offs, x, mask=offs < N)
+@triton.jit
+def _probe(X, N, BLOCK: tl.constexpr):
+    pid = tl.program_id(0)
+    offs = pid * BLOCK + tl.arange(0, BLOCK)
+    x = tl.load(X + offs, mask=offs < N)
+    tl.store(X + offs, x, mask=offs < N)
 
-    x = torch.randn(1024, device="cuda", dtype=torch.float32)
-    _probe[(8,)](x, 1024, BLOCK=128, num_warps=4, num_stages=2)
-    torch.cuda.synchronize()
+x = torch.randn(1024, device='cuda', dtype=torch.float32)
+_probe[(8,)](x, 1024, BLOCK=128, num_warps=4, num_stages=2)
+torch.cuda.synchronize()
 
-    cache = _probe.cache
-    info = {"cache_type": type(cache).__name__, "cache_keys": [str(k) for k in list(cache.keys())[:3]]}
-    for k, v in cache.items():
-        if isinstance(v, dict):
-            info["structure"] = "nested"
-            inner_keys = list(v.keys())[:2]
-            info["inner_keys"] = [str(k2) for k2 in inner_keys]
-            for k2, compiled in v.items():
-                info["compiled_type"] = type(compiled).__name__
-                info["has_metadata"] = hasattr(compiled, "metadata")
-                if hasattr(compiled, "metadata"):
-                    m = compiled.metadata
-                    info["metadata_type"] = type(m).__name__
-                    info["metadata_attrs"] = [a for a in dir(m) if not a.startswith("_")]
-                    info["num_warps"] = getattr(m, "num_warps", "MISSING")
-                    info["num_stages"] = getattr(m, "num_stages", "MISSING")
-                    info["shared"] = getattr(m, "shared", "MISSING")
-                break
-        else:
-            info["structure"] = "flat"
-            info["compiled_type"] = type(v).__name__
-            info["has_metadata"] = hasattr(v, "metadata")
-        break
-    return info
+cache = _probe.cache
+info = {"cache_type": type(cache).__name__}
+for k, v in cache.items():
+    if isinstance(v, dict):
+        info["structure"] = "nested"
+        for k2, compiled in v.items():
+            info["compiled_type"] = type(compiled).__name__
+            info["has_metadata"] = hasattr(compiled, "metadata")
+            if hasattr(compiled, "metadata"):
+                m = compiled.metadata
+                info["metadata_type"] = type(m).__name__
+                info["metadata_attrs"] = [a for a in dir(m) if not a.startswith("_")]
+                info["num_warps"] = getattr(m, "num_warps", "MISSING")
+                info["num_stages"] = getattr(m, "num_stages", "MISSING")
+                info["shared"] = getattr(m, "shared", "MISSING")
+            break
+    else:
+        info["structure"] = "flat"
+        info["compiled_type"] = type(v).__name__
+        info["has_metadata"] = hasattr(v, "metadata")
+        if hasattr(v, "metadata"):
+            m = v.metadata
+            info["num_warps"] = getattr(m, "num_warps", "MISSING")
+            info["num_stages"] = getattr(m, "num_stages", "MISSING")
+    break
+
+print(json.dumps(info))
+"""
+    import tempfile, json as _json
+    from pathlib import Path as _Path
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
+        f.write(probe_code)
+        tmp = f.name
+    try:
+        proc = subprocess.run([sys.executable, tmp], capture_output=True, text=True, timeout=30)
+        last_line = [l for l in proc.stdout.strip().splitlines() if l.startswith("{")]
+        if last_line:
+            return _json.loads(last_line[-1])
+        return {"error": "no json output", "stdout": proc.stdout[-500:], "stderr": proc.stderr[-500:]}
+    finally:
+        os.unlink(tmp)
 
 
 @app.post("/verify", response_model=VerifyResponse)
