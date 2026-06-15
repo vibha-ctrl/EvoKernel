@@ -2,114 +2,160 @@
 
 Autonomous Triton kernel optimization via hardware-guided evolutionary search.
 
+> **Status:** Framework complete. GPU runs pending — results will appear in [`results/`](results/) after RunPod execution.
+
 ```
 Generate → Verify → Benchmark → Profile → Select → Mutate → Repeat
 ```
 
+---
+
+## What It Does
+
+Traditional GPU kernel optimization is a manual loop: write → benchmark → profile → modify → repeat. EvoKernel automates this entirely.
+
+An LLM (Claude claude-opus-4-5) acts as the optimization engineer — generating kernel variants, reading real hardware profiler output, and proposing targeted improvements. The GPU is the source of truth. The fastest correct kernel wins each generation.
+
+---
+
 ## Architecture
 
 ```
-Local machine (you)
-  ├── run_search.py          evolutionary loop orchestration
-  ├── evokernel/agents/      Claude claude-opus-4-5: generator + critic
+Local machine
+  ├── run_search.py          orchestrates the evolutionary loop
+  ├── evokernel/agents/      Claude claude-opus-4-5 generator + critic
   ├── evokernel/search/      search engine + SQLite candidate store
-  ├── evokernel/mcp/         MCP tool server (optional interactive use)
-  └── evokernel/reports/     Markdown report generator
+  ├── evokernel/mcp/         MCP tool server for interactive use
+  └── evokernel/reports/     live Markdown results + final report
         │
         │  HTTP (FastAPI)
         ▼
 RunPod Pod (A100 / H100)
   └── gpu_server/server.py
-        ├── POST /verify      correctness vs PyTorch reference
-        ├── POST /benchmark   CUDA events + triton.testing.do_bench
-        └── POST /profile     ncu + Triton compiler metadata
+        ├── POST /verify      3-stage correctness gate vs PyTorch reference
+        ├── POST /benchmark   CUDA events + triton.testing.do_bench (100 reps)
+        └── POST /profile     real ncu (Nsight Compute) — required, no fallback
 ```
 
-## Quick Start
+---
 
-### 1. Set up RunPod pod
+## Kernels Under Optimization
 
-Launch a pod with an A100/H100. In the pod terminal:
+| Kernel | Operation | Optimization Target |
+|--------|-----------|---------------------|
+| `rmsnorm` | RMSNorm normalization | memory coalescing, vectorized loads, occupancy |
+| `rope` | Rotary positional encoding | indexing efficiency, memory access patterns |
+| `fused_rmsnorm_rope` | RMSNorm + RoPE in a single kernel pass | fusion, launch overhead, memory traffic |
+
+All three are core LLM inference primitives used in LLaMA, Mistral, and similar architectures.
+
+---
+
+## How the Search Works
+
+**Generation 0:** Baseline Triton kernel benchmarked on GPU — establishes starting latency.
+
+**Each generation:**
+1. **Critic** (Claude) reads ncu profiler output → diagnoses bottleneck → produces optimization hints
+2. **Generator** (Claude) mutates top-k parents guided by hints → produces N new variants
+3. All variants run through a **3-stage correctness gate**: syntax check → runtime check → `torch.allclose` vs PyTorch reference
+4. Passing variants **benchmarked**: 25 warmup + 100 timed reps, median latency reported
+5. **Top-k survivors** profiled with ncu (occupancy, DRAM utilization, warp stall reasons)
+6. Repeat until improvement < 2% per generation
+
+**Convergence** is automatic — typically 4–6 generations before diminishing returns.
+
+---
+
+## Profiling
+
+ncu (Nsight Compute) is **required** — no fallback. The server refuses to start without it.
+
+Metrics collected per candidate:
+- Latency (µs), throughput (GB/s), bandwidth utilization %
+- Register count, shared memory, `num_warps`, `num_stages`
+- Theoretical occupancy
+- DRAM utilization %, L1 cache hit rate %
+- Warp stall reasons: memory dependency, long scoreboard
+
+---
+
+## Results
+
+Search results are written to [`results/`](results/) after each generation and committed to this repo. Check there for live speedup numbers once GPU runs complete.
+
+---
+
+## Setup
+
+### 1. RunPod pod
+
+Launch an A100/H100 pod using the **RunPod PyTorch** template. In the pod terminal:
 
 ```bash
-git clone <this-repo> /workspace/evokernel
-pip install -r /workspace/evokernel/gpu_server/requirements.txt
-cd /workspace/evokernel/gpu_server
+apt-get update -y && apt-get install -y nsight-compute
+git clone https://github.com/vibha-ctrl/EvoKernel.git /workspace/EvoKernel
+pip install -r /workspace/EvoKernel/gpu_server/requirements.txt
+cd /workspace/EvoKernel/gpu_server
 uvicorn server:app --host 0.0.0.0 --port 8000
 ```
 
-### 2. Configure local environment
+Verify setup:
+```bash
+curl https://YOUR_POD_ID-8000.proxy.runpod.net/health
+```
+
+### 2. Local environment
 
 ```bash
 cp .env.example .env
-# Edit .env:
-#   RUNPOD_SERVER_URL=https://YOUR_POD_ID-8000.proxy.runpod.net
-#   ANTHROPIC_API_KEY=sk-ant-...
-```
-
-### 3. Install local dependencies
-
-```bash
+# Set RUNPOD_SERVER_URL and ANTHROPIC_API_KEY in .env
 pip install -e .
 ```
 
-### 4. Run a search
+### 3. Run
 
 ```bash
-# Optimize RMSNorm
 python run_search.py rmsnorm
-
-# Optimize RoPE with custom settings
-python run_search.py rope --generations 8 --candidates 10
-
-# Optimize fused RMSNorm + RoPE (hardest)
+python run_search.py rope --generations 8
 python run_search.py fused_rmsnorm_rope
-
-# Check progress mid-run
-python run_search.py status rmsnorm
-
-# Generate report from existing DB
-python run_search.py report-only rmsnorm
+python run_search.py status rmsnorm        # check progress mid-run
+python run_search.py report-only rmsnorm   # regenerate report from DB
 ```
 
-## Kernels
+---
 
-| Kernel | Operation | Optimization Focus |
-|--------|-----------|-------------------|
-| `rmsnorm` | RMSNorm normalization | memory coalescing, vectorization |
-| `rope` | Rotary positional encoding | indexing efficiency, memory access |
-| `fused_rmsnorm_rope` | RMSNorm + RoPE in one pass | kernel fusion, launch overhead |
-
-## How It Works
-
-**Generation 0:** Baseline kernel benchmarked on GPU. Establishes starting latency.
-
-**Each generation:**
-1. Critic (Claude) reads profiler metrics → produces optimization hints
-2. Generator (Claude) mutates top-k parents + hints → N new variants  
-3. All variants verified against PyTorch reference (`torch.allclose`)
-4. Passing variants benchmarked with CUDA events (100 reps, median)
-5. Top-k survivors kept, profiled with ncu + Triton compiler metadata
-6. Repeat until convergence
-
-**Convergence:** Stops when best improvement < 2% per generation (configurable).
-
-## MCP Server (interactive use)
+## MCP Server
 
 ```bash
 fastmcp run evokernel/mcp/server.py
 ```
 
-Tools exposed: `verify_kernel`, `benchmark_kernel`, `profile_kernel`,
-`retrieve_history`, `generate_report`, `gpu_status`.
+Exposes: `verify_kernel`, `benchmark_kernel`, `profile_kernel`, `retrieve_history`, `generate_report`, `gpu_status`
 
-## Profiling on RunPod
+---
 
-RunPod pods run with Linux capabilities that allow `ncu` to access hardware
-performance counters. The GPU server automatically detects `ncu` and falls
-back to Triton compiler metadata + estimated occupancy if not available.
+## Repository Structure
 
-For full ncu access, install Nsight Compute on the pod:
-```bash
-apt-get install -y nsight-compute
+```
+EvoKernel/
+├── run_search.py                       main CLI (search / status / report-only)
+├── gpu_server/
+│   └── server.py                       FastAPI GPU server — runs on RunPod
+├── evokernel/
+│   ├── agents/
+│   │   ├── generator.py                LLM kernel variant generator
+│   │   └── critic.py                   LLM profiler output interpreter
+│   ├── kernels/
+│   │   ├── rmsnorm/                    baseline + PyTorch reference
+│   │   ├── rope/                       baseline + PyTorch reference
+│   │   └── fused_rmsnorm_rope/         baseline + PyTorch reference
+│   ├── search/
+│   │   ├── evolutionary.py             main search loop
+│   │   └── candidate_store.py          SQLite persistence
+│   ├── mcp/server.py                   MCP tool server
+│   └── reports/
+│       ├── report_generator.py         final Markdown report
+│       └── results_tracker.py          live per-generation results writer
+└── results/                            search results (updated each run)
 ```
