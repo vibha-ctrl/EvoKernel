@@ -22,7 +22,6 @@ import torch
 import triton
 import triton.testing
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 app = FastAPI(title="EvoKernel GPU Server", version="0.1.0")
@@ -426,6 +425,9 @@ def profile(req: KernelRequest):
     result.stall_memory_dependency_pct = ncu_result.get("stall_memory_dependency_pct")
     result.stall_long_scoreboard_pct = ncu_result.get("stall_long_scoreboard_pct")
     result.sm_active_cycles_pct = ncu_result.get("sm_active_cycles_pct")
+    # ncu register count is more accurate than PTX estimation — prefer it
+    if ncu_result.get("register_count_ncu") is not None:
+        result.register_count = ncu_result["register_count_ncu"]
 
     return result
 
@@ -532,12 +534,12 @@ def _run_ncu(code: str, kernel_type: str) -> dict:
 
         metrics = ",".join([
             "sm__throughput.avg.pct_of_peak_sustained_elapsed",
-            "l1tex__t_bytes_pipe_lsu_mem_global_op_ld.sum",
-            "l1tex__t_bytes_pipe_lsu_mem_global_op_st.sum",
+            "dram__throughput.avg.pct_of_peak_sustained_elapsed",
+            "l1tex__t_sector_hit_rate.pct",
             "smsp__warp_issue_stalled_long_scoreboard_per_warp_active.avg",
             "smsp__warp_issue_stalled_mio_throttle_per_warp_active.avg",
             "smsp__warp_issue_stalled_short_scoreboard_per_warp_active.avg",
-            "l1tex__t_sector_hit_rate.pct",
+            "launch__registers_per_thread",
         ])
 
         cmd = [
@@ -600,7 +602,11 @@ def _build_ncu_harness(code: str, kernel_type: str) -> str:
             import torch; torch.manual_seed(42)
             x = torch.randn(2048, 4096, dtype=torch.float16, device='cuda')
             w = torch.ones(4096, dtype=torch.float16, device='cuda')
-            for _ in range(5): run(x, w)
+            # Warmup: triggers Triton JIT compile so profiled reps are pure execution
+            for _ in range(25): run(x, w)
+            torch.cuda.synchronize()
+            # Profiled reps — ncu collects metrics from these
+            for _ in range(10): run(x, w)
             torch.cuda.synchronize()
         """),
         "rope": textwrap.dedent("""
@@ -612,7 +618,9 @@ def _build_ncu_harness(code: str, kernel_type: str) -> str:
             f = torch.outer(t, inv)
             cos = torch.cat([f.cos(), f.cos()], -1).half()
             sin = torch.cat([f.sin(), f.sin()], -1).half()
-            for _ in range(5): run(q, k, cos, sin)
+            for _ in range(25): run(q, k, cos, sin)
+            torch.cuda.synchronize()
+            for _ in range(10): run(q, k, cos, sin)
             torch.cuda.synchronize()
         """),
         "fused_rmsnorm_rope": textwrap.dedent("""
@@ -624,7 +632,9 @@ def _build_ncu_harness(code: str, kernel_type: str) -> str:
             f = torch.outer(t, inv)
             cos = torch.cat([f.cos(), f.cos()], -1).half()
             sin = torch.cat([f.sin(), f.sin()], -1).half()
-            for _ in range(5): run(x, w, cos, sin, 32)
+            for _ in range(25): run(x, w, cos, sin, 32)
+            torch.cuda.synchronize()
+            for _ in range(10): run(x, w, cos, sin, 32)
             torch.cuda.synchronize()
         """),
     }
@@ -640,8 +650,10 @@ def _parse_ncu_csv(csv_text: str) -> dict:
     try:
         reader = csv.DictReader(io.StringIO(csv_text))
         for row in reader:
-            metric = row.get("Metric Name", "")
-            value_str = row.get("Metric Value", "0").replace(",", "")
+            # ncu CSV columns vary by version — try both naming conventions
+            metric = row.get("Metric Name", "") or row.get("ID", "")
+            value_str = (row.get("Metric Value", "") or row.get("Value", "") or "0")
+            value_str = value_str.replace(",", "").strip()
             try:
                 value = float(value_str)
             except ValueError:
@@ -649,20 +661,16 @@ def _parse_ncu_csv(csv_text: str) -> dict:
 
             if "sm__throughput" in metric:
                 result["sm_active_cycles_pct"] = round(value, 1)
+            elif "dram__throughput" in metric:
+                result["dram_utilization_pct"] = round(value, 1)
+            elif "sector_hit_rate" in metric:
+                result["l1_hit_rate_pct"] = round(value, 1)
             elif "stalled_long_scoreboard" in metric:
                 result["stall_long_scoreboard_pct"] = round(value, 1)
             elif "stalled_mio_throttle" in metric:
                 result["stall_memory_dependency_pct"] = round(value, 1)
-            elif "sector_hit_rate" in metric:
-                result["l1_hit_rate_pct"] = round(value, 1)
-
-        # Estimate DRAM utilization from L1 traffic
-        l1_load = result.get("l1_load_bytes", 0)
-        l1_store = result.get("l1_store_bytes", 0)
-        if l1_load or l1_store:
-            result["dram_utilization_pct"] = round(
-                min(100.0, (l1_load + l1_store) / 1e9 * 10), 1
-            )
+            elif "registers_per_thread" in metric:
+                result["register_count_ncu"] = int(value)
     except Exception:
         pass
 

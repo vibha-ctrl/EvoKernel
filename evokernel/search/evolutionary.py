@@ -11,13 +11,11 @@ Orchestrates calls to:
 """
 
 import concurrent.futures
-import os
 import time
 from dataclasses import dataclass
 
 import httpx
 from rich.console import Console
-from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeElapsedColumn
 from rich.table import Table
 
 from evokernel.agents import generator as gen_agent
@@ -79,6 +77,7 @@ def run_search(
 
     console.print("\n[bold]Generation 0[/bold] — benchmarking baseline...")
     _verify_one(client, baseline, store)
+    baseline = store.get(baseline.id)  # refresh — _verify_one updates DB, not the local object
     if not baseline.is_verified:
         raise RuntimeError(f"Baseline kernel failed verification: {baseline.verify_error_msg}")
 
@@ -307,13 +306,12 @@ def _verify_batch(client: httpx.Client, candidates: list[Candidate],
 
 
 def _benchmark_batch(client: httpx.Client, candidates: list[Candidate],
-                     store: CandidateStore, parallel: bool = True):
-    if parallel:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
-            list(pool.map(lambda c: _benchmark_one(client, c, store), candidates))
-    else:
-        for c in candidates:
-            _benchmark_one(client, c, store)
+                     store: CandidateStore, parallel: bool = False):
+    # Benchmarks are ALWAYS sequential — parallel GPU execution causes memory bandwidth
+    # contention between candidates, inflating all latency numbers and making comparisons
+    # meaningless. parallel flag kept for API compatibility but ignored here.
+    for c in candidates:
+        _benchmark_one(client, c, store)
 
 
 # ---------------------------------------------------------------------------
